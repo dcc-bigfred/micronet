@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    permissions:
+      contents: read
+    uses: dcc-bigfred/common/.github/workflows/rust-musl-ci.yml@v2
+    with:
+      binaries: |
+        [
+          {"name":"configure-dhcp","dist":"configure-dhcp-linux"},
+          {"name":"configure-ethernet","dist":"configure-ethernet-linux"}
+        ]

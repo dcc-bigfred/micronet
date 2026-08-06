@@ -146,6 +146,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "configure-ethernet"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "env_logger",
+ "log",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "defmt"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

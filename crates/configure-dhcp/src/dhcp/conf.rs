@@ -106,10 +106,7 @@ pub fn parse_reservations(text: &str) -> BTreeMap<String, String> {
 }
 
 /// Merge new MAC→IP into reservations; preserves unknown keys. Returns (new text, changed).
-pub fn merge_reservations(
-    existing_text: &str,
-    additions: &[(MacAddr, String)],
-) -> (String, bool) {
+pub fn merge_reservations(existing_text: &str, additions: &[(MacAddr, String)]) -> (String, bool) {
     let mut map = parse_reservations(existing_text);
     let mut changed = false;
     for (mac, ip) in additions {
@@ -180,7 +177,11 @@ SECONDARY={secondary}\n"
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::field_reassign_with_default)]
+    #![allow(
+        clippy::expect_used,
+        clippy::unwrap_used,
+        clippy::field_reassign_with_default
+    )]
 
     use super::*;
     use tempfile::tempdir;

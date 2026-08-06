@@ -2,11 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::dhcp::{dnsmasq_exists, dnsmasq_running, ensure_gateway_addr, first_ethernet_iface};
 use crate::dhcp::{
     ensure_base_conf, ensure_ethernet_primary, parse_arp_file, parse_leases_file, sighup_dnsmasq,
     start_dnsmasq, write_reservations, DhcpDefaults, DEFAULT_ETHERNET_CONF, DEFAULT_GATEWAY,
 };
-use crate::dhcp::{dnsmasq_exists, dnsmasq_running, ensure_gateway_addr, first_ethernet_iface};
 use crate::stack::{Device, MacAddr, Registry};
 use crate::sticky::StickyState;
 use crate::Result;
@@ -173,9 +173,7 @@ pub fn run_check(registry: &Registry, paths: &Paths, defaults: &DhcpDefaults) ->
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "-".into()),
-            d.ip
-                .map(|i| i.to_string())
-                .unwrap_or_else(|| "-".into()),
+            d.ip.map(|i| i.to_string()).unwrap_or_else(|| "-".into()),
             if d.hostname.is_empty() {
                 "-"
             } else {

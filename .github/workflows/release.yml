@@ -1,0 +1,24 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    uses: dcc-bigfred/.github/.github/workflows/rust-oras-release.yml@v1
+    with:
+      oci_image: ghcr.io/dcc-bigfred/micronet-linux-arm64
+      oci_title: micronet
+      oci_layers: >-
+        configure-dhcp-linux-arm64=application/vnd.dcc-bigfred.configure-dhcp.linux.arm64.v1,configure-ethernet-linux-arm64=application/vnd.dcc-bigfred.configure-ethernet.linux.arm64.v1
+      oci_elf_layers: configure-dhcp-linux-arm64,configure-ethernet-linux-arm64
+      oci_elf_section: .micronet.version
+      ci_workflow: ci.yml
+      ci_scripts_ref: v1
+    secrets: inherit

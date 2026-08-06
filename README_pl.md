@@ -146,5 +146,6 @@ To samo hasło dla obu.
 
 ## Uwagi techniczne
 
-- Automatyzacja DHCP: crate Rust [`configure-dhcp/`](./configure-dhcp/) (`/usr/sbin/configure-dhcp` na BigFred OS)
+- Narzędzia (workspace Rust): [`crates/configure-dhcp`](./crates/configure-dhcp/), [`crates/configure-ethernet`](./crates/configure-ethernet/) → `/usr/sbin/` na BigFred OS (pakiet OCI `micronet`)
+- Lokalny publish OCI: `make publish-oci` (klonuje wspólne skrypty z `dcc-bigfred/.github` @ `v1` do `.ci-github/`)
 - Szczegółowe menu EAP613: [plans/2026-07-14-eap613-konfiguracja.md](./plans/2026-07-14-eap613-konfiguracja.md).

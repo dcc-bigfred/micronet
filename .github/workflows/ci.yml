@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: dcc-bigfred/.github/.github/workflows/rust-musl-ci.yml@v1
+    with:
+      binaries: |
+        [
+          {"name":"configure-dhcp","dist":"configure-dhcp-linux"},
+          {"name":"configure-ethernet","dist":"configure-ethernet-linux"}
+        ]
+
+  publish-oci:
+    needs: ci
+    uses: dcc-bigfred/.github/.github/workflows/rust-oras-publish-main.yml@v1
+    with:
+      oci_image: ghcr.io/dcc-bigfred/micronet-linux-arm64
+      oci_title: micronet
+      oci_layers: >-
+        configure-dhcp-linux-arm64=application/vnd.dcc-bigfred.configure-dhcp.linux.arm64.v1,configure-ethernet-linux-arm64=application/vnd.dcc-bigfred.configure-ethernet.linux.arm64.v1
+      ci_scripts_ref: v1
+    secrets: inherit

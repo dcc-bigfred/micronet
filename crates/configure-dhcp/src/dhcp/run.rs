@@ -92,9 +92,7 @@ fn dnsmasq_pids() -> Vec<i32> {
             continue;
         }
         let cmdline = fs::read_to_string(ent.path().join("cmdline")).unwrap_or_default();
-        if cmdline.split('\0').next() == Some(DNSMASQ_BIN)
-            || cmdline.contains("dnsmasq")
-        {
+        if cmdline.split('\0').next() == Some(DNSMASQ_BIN) || cmdline.contains("dnsmasq") {
             if let Ok(pid) = name.parse::<i32>() {
                 pids.push(pid);
             }

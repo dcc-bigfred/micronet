@@ -1,10 +1,14 @@
 //! Gate behaviour with a fake stack (no root / dnsmasq required for skip path).
 
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::field_reassign_with_default)]
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::field_reassign_with_default
+)]
 
 use configure_dhcp::dhcp::DhcpDefaults;
 use configure_dhcp::run::{run_up, Paths};
-use configure_dhcp::stack::{Device, DeviceKind, MacAddr, Stack, Registry};
+use configure_dhcp::stack::{Device, DeviceKind, MacAddr, Registry, Stack};
 use configure_dhcp::Result;
 use tempfile::tempdir;
 

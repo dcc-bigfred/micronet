@@ -43,34 +43,35 @@ fn main() -> ExitCode {
     let defaults = DhcpDefaults::default();
 
     match cli.command.unwrap_or(Commands::Up) {
-        Commands::Up | Commands::Configure | Commands::Start => match run_up(&registry, &paths, &defaults)
-        {
-            Ok(report) => {
-                if report.gate_on {
-                    log::info!(
-                        "configure-dhcp: gate ON ({}); iface={}; reservations_changed={}",
-                        report.reason,
-                        report.iface,
-                        report.reservations_changed
-                    );
-                    for d in &report.devices {
+        Commands::Up | Commands::Configure | Commands::Start => {
+            match run_up(&registry, &paths, &defaults) {
+                Ok(report) => {
+                    if report.gate_on {
                         log::info!(
-                            "  detected {} {:?} {:?}",
-                            d.stack,
-                            d.mac.as_ref().map(ToString::to_string),
-                            d.ip
+                            "configure-dhcp: gate ON ({}); iface={}; reservations_changed={}",
+                            report.reason,
+                            report.iface,
+                            report.reservations_changed
                         );
+                        for d in &report.devices {
+                            log::info!(
+                                "  detected {} {:?} {:?}",
+                                d.stack,
+                                d.mac.as_ref().map(ToString::to_string),
+                                d.ip
+                            );
+                        }
+                    } else {
+                        log::info!("configure-dhcp: {}", report.reason);
                     }
-                } else {
-                    log::info!("configure-dhcp: {}", report.reason);
+                    ExitCode::SUCCESS
                 }
-                ExitCode::SUCCESS
+                Err(e) => {
+                    log::error!("configure-dhcp: {e}");
+                    ExitCode::FAILURE
+                }
             }
-            Err(e) => {
-                log::error!("configure-dhcp: {e}");
-                ExitCode::FAILURE
-            }
-        },
+        }
         Commands::Check => match run_check(&registry, &paths, &defaults) {
             Ok(code) => ExitCode::from(code as u8),
             Err(e) => {

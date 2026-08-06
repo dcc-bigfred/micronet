@@ -9,15 +9,10 @@ jobs:
   release:
     permissions:
       contents: write
-      packages: write
-    uses: dcc-bigfred/.github/.github/workflows/rust-oras-release.yml@v1
+    uses: dcc-bigfred/.github/.github/workflows/rust-release.yml@v2
     with:
-      oci_image: ghcr.io/dcc-bigfred/micronet-linux-arm64
-      oci_title: micronet
-      oci_layers: >-
-        configure-dhcp-linux-arm64=application/vnd.dcc-bigfred.configure-dhcp.linux.arm64.v1,configure-ethernet-linux-arm64=application/vnd.dcc-bigfred.configure-ethernet.linux.arm64.v1
-      oci_elf_layers: configure-dhcp-linux-arm64,configure-ethernet-linux-arm64
-      oci_elf_section: .micronet.version
+      elf_binaries: configure-dhcp-linux-arm64,configure-ethernet-linux-arm64
+      elf_section: .micronet.version
       ci_workflow: ci.yml
-      ci_scripts_ref: v1
+      ci_scripts_ref: v2
     secrets: inherit

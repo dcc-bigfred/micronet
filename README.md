@@ -146,6 +146,6 @@ Same password for both.
 
 ## Technical notes
 
-- Tools (Rust workspace): [`crates/configure-dhcp`](./crates/configure-dhcp/), [`crates/configure-ethernet`](./crates/configure-ethernet/) → `/usr/sbin/` on BigFred OS (OCI package `micronet`)
-- Local OCI publish: `make publish-oci` (clones shared scripts from `dcc-bigfred/.github` @ `v1` into `.ci-github/`)
+- Tools (Rust workspace): [`crates/configure-dhcp`](./crates/configure-dhcp/), [`crates/configure-ethernet`](./crates/configure-ethernet/) → `/usr/sbin/` on BigFred OS (GitHub Actions artifacts / Releases)
+- Shared CI scripts: `make ci-scripts-update` clones `dcc-bigfred/.github` @ `v2` into `.ci-github/`
 - Detailed EAP613 menu paths: [plans/2026-07-14-eap613-konfiguracja.md](./plans/2026-07-14-eap613-konfiguracja.md).

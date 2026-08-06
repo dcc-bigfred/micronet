@@ -147,5 +147,5 @@ Same password for both.
 ## Technical notes
 
 - Tools (Rust workspace): [`crates/configure-dhcp`](./crates/configure-dhcp/), [`crates/configure-ethernet`](./crates/configure-ethernet/) → `/usr/sbin/` on BigFred OS (GitHub Actions artifacts / Releases)
-- Shared CI scripts: `make ci-scripts-update` clones `dcc-bigfred/.github` @ `v2` into `.ci-github/`
+- Shared CI: reusable workflows in [`dcc-bigfred/common`](https://github.com/dcc-bigfred/common) (`@v2`); binary fetch via `go run github.com/dcc-bigfred/common/cmd/fetch@latest`
 - Detailed EAP613 menu paths: [plans/2026-07-14-eap613-konfiguracja.md](./plans/2026-07-14-eap613-konfiguracja.md).

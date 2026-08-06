@@ -147,5 +147,5 @@ To samo hasło dla obu.
 ## Uwagi techniczne
 
 - Narzędzia (workspace Rust): [`crates/configure-dhcp`](./crates/configure-dhcp/), [`crates/configure-ethernet`](./crates/configure-ethernet/) → `/usr/sbin/` na BigFred OS (artefakty GitHub Actions / Releases)
-- Wspólne skrypty CI: `make ci-scripts-update` klonuje `dcc-bigfred/.github` @ `v2` do `.ci-github/`
+- Wspólne CI: reusable workflows w [`dcc-bigfred/common`](https://github.com/dcc-bigfred/common) (`@v2`); pobieranie binarek: `go run github.com/dcc-bigfred/common/cmd/fetch@latest`
 - Szczegółowe menu EAP613: [plans/2026-07-14-eap613-konfiguracja.md](./plans/2026-07-14-eap613-konfiguracja.md).

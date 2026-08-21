@@ -2,7 +2,9 @@
 
 **Język:** [English](./README.md) | Polski
 
-Powiązane plany: [topologia](./plans/2026-07-14-topologia-wifi-hala.md), [ustawienia EAP613](./plans/2026-07-14-eap613-konfiguracja.md)
+Powiązane plany: [topologia](../../plans/2026-07-14-topologia-wifi-hala.md), [ustawienia EAP613](../../plans/2026-07-14-eap613-konfiguracja.md)
+
+Architektura daemona: [ARCHITECTURE.md](../../ARCHITECTURE.md).
 
 Dla mało technicznego operatora. Cel: WiFi o niskim opóźnieniu dla pilotów (`bigfred2`, 2.4 GHz) i telefonów (`bigfred5`, 5 GHz).
 
@@ -10,24 +12,39 @@ Dla mało technicznego operatora. Cel: WiFi o niskim opóźnieniu dla pilotów (
 
 - Raspberry Pi 3 + Ethernet = **BigFred** (serwer)
 - Omada **EAP610/613 × 3** (access pointy)
-- Switch PoE **TL-SF1006P** (porty 1–4 PoE+, 5–6 zwykłe)
+- **Jeden** z dwóch backhaulów L2 (wybór operatora; daemon nie rozpoznaje modelu):
+  - **Switch PoE TL-SF1006P** (porty 1–4 PoE+, 5–6 zwykłe) — BigFred **serwuje DHCP**
+  - **MikroTik hEX PoE lite RB750UPr2** (5× FE, **4 porty PoE**) — DHCP na routerze; BigFred **nie** serwuje DHCP
 - **Omada OC200** jest opcjonalny (centralny kontroler). Bez niego konfigurujesz każdy AP w trybie **standalone** (te same SSID/ustawienia; różnią się tylko kanały).
-- 4–5 kabli Ethernet, zasilacze (Pi3, switch; OC200 jeśli jest), 3 statywy na **2 m**, laptop/telefon do konfiguracji, opcjonalnie UPS
+- Kable Ethernet, zasilacze, 3 statywy na **2 m**, laptop/telefon do konfiguracji, opcjonalnie UPS
 
 ## Jak działa sieć na BigFredzie
 
-Po starcie BigFred OS:
+Po starcie daemon **`micronet`** (pierwszy fizyczny Ethernet):
 
-1. Podnosi Ethernet (`configure-ethernet`).
-2. Uruchamia **`configure-dhcp`**, które sonduje LAN pod kątem stacka WiFi eventowego (dziś: **Omada** AP lub OC200).
-3. **Tylko gdy wykryje sprzęt Omada** ustawia BigFred na `10.0.10.1/24` i startuje **dnsmasq** (pula `10.0.10.50–10.0.10.200`, lease **7 dni**, brama/DNS = BigFred). Wykryte MAC Omada dostają stałe rezerwacje DHCP.
-4. W sieci klubowej **bez** Omada DHCP **nie** startuje (brak konfliktu z klubowym DHCP).
+1. Podnosi interfejs (bez adresu).
+2. Wysyła **DHCPDISCOVER** i czeka na **DHCPOFFER** (bez REQUEST).
+3. **Jest oferta** → tryb **`client`**: `dhclient`, bez dnsmasq, bez `gateway.ip` na Pi.
+4. **Brak oferty** → tymczasowo `.252` w skonfigurowanej podsieci, potem `ping gateway.ip`:
+   - ping OK → tryb **`static`**: zostań na `.252`, default via `gateway.ip`, bez dnsmasq
+   - ping fail → tryb **`gateway`**: weź `gateway.ip` (seed obrazu: **`10.0.10.1/24`**), start **dnsmasq** (pula `.50–.200`, sticky **7d**, router/DNS = BigFred). **Bez default route.**
 
-Nie edytujesz dnsmasq ręcznie pod setup eventu.
+Nie ma wykrywania Omady ani rezerwacji `dhcp-host=` per MAC. Stickiness to leasefile dnsmasq + `7d`.
+
+Typowe mapowanie:
+
+| Backhaul | Obcy DHCP / żywy `gateway.ip` | Tryb BigFred | Kto daje lease laptopowi |
+|---|---|---|---|
+| TL-SF1006P (głupi switch PoE) | brak | `gateway` | dnsmasq na BigFredzie |
+| hEX PoE lite RB750UPr2 | tak (router) | `client` albo `static` | MikroTik |
+
+Nie edytujesz dnsmasq ręcznie pod setup eventu. JSON: `$DATA_DIR/etc/micronet.json` (hot-reload).
 
 ---
 
-## 1. Okablowanie (przed włączeniem prądu)
+## Zestaw A — Switch TL-SF1006P (BigFred = DHCP)
+
+### 1. Okablowanie (przed włączeniem prądu)
 
 | Port switcha | Urządzenie | Uwagi |
 |---|---|---|
@@ -43,29 +60,56 @@ Nie edytujesz dnsmasq ręcznie pod setup eventu.
 - [ ] OC200 → 5 (jeśli używasz)
 - [ ] Zasilacze: switch, BigFred, OC200
 
-## 2. Przełączniki z tyłu switcha
+### 2. Przełączniki z tyłu switcha
 
 - [ ] **Priority Mode = ON** (port 1 = BigFred)
 - [ ] **Extend Mode = OFF** (inaczej porty spadną do 10 Mb/s)
 
-## 3. Kolejność włączania
+### 3. Kolejność włączania
 
-Najpierw BigFred (DHCP):
+Pusta hala: ping na `10.0.10.1` pada → BigFred od razu jest gatewayem. AP-y dostaną lease po starcie.
 
 - [ ] 1. Switch
-- [ ] 2. BigFred — poczekaj ~2 min (`configure-dhcp` wykryje Omada i uruchomi DHCP)
+- [ ] 2. BigFred — poczekaj aż UI odpowie na `http://10.0.10.1` (~1–2 min)
 - [ ] 3. OC200 (jeśli jest) — poczekaj ~3 min
 - [ ] 4. AP1/2/3 przez PoE — poczekaj ~3 min
 
-## 4. Laptop w sieci
+### 4. Laptop w sieci
 
-- [ ] Ethernet do portu 6 (laptop dostanie adres z BigFreda, np. `10.0.10.51`)
+- [ ] Ethernet do portu 6 — laptop dostanie adres **z BigFreda**, np. `10.0.10.51`
+
+---
+
+## Zestaw B — MikroTik hEX PoE lite RB750UPr2 (router = DHCP)
+
+BigFred **nie** może serwować DHCP (router już to robi). ether1 **bez PoE**.
+
+| Port | Urządzenie | Uwagi |
+|---|---|---|
+| ether1 | BigFred | bez PoE |
+| ether2 | AP1 | PoE |
+| ether3 | AP2 | PoE |
+| ether4 | AP3 | PoE |
+| ether5 | zapasowy AP / laptop | PoE |
+
+### Kolejność włączania
+
+- [ ] 1. MikroTik (poczekaj aż jego DHCP wstanie)
+- [ ] 2. BigFred — dołącza jako **`client`** (albo **`static` `.252`**, gdy router nie ma DHCP, ale odpowiada na ping `gateway.ip`)
+- [ ] 3. AP-y przez PoE na ether2–5
+
+### Laptop
+
+- [ ] Włóż do wolnego portu routera — lease daje **MikroTik**, nie BigFred.
+- [ ] `micronet status` ma być `client` albo `static`, **nie** `gateway`.
+
+---
 
 ## 5. Konfiguracja WiFi — wybierz ścieżkę
 
 ### Ścieżka A — z OC200 (kontroler)
 
-- [ ] Znajdź IP OC200 (**Omada Discovery** od TP-Link albo na BigFredzie: `configure-dhcp check`)
+- [ ] Znajdź IP OC200 (**Omada Discovery** od TP-Link)
 - [ ] Otwórz `https://<ip-oc200>`, zignoruj ostrzeżenie certyfikatu
 - [ ] Login `admin` / `admin`, ustaw nowe hasło admina
 - [ ] Wizard: region/strefa; pomiń tworzenie SSID
@@ -130,15 +174,16 @@ To samo hasło dla obu.
 ## 8. Walidacja
 
 - [ ] Telefon widzi `bigfred2` i `bigfred5`
-- [ ] Na `bigfred5` otwórz `http://10.0.10.1` (BigFred)
+- [ ] Na `bigfred5` otwórz `http://10.0.10.1` (BigFred) przy seedzie eventu / zestawie switch
 - [ ] Pilot na `bigfred2`
-- [ ] Ping do `10.0.10.1` &lt; 25 ms
+- [ ] Ping do huba &lt; 25 ms
 - [ ] RSSI na stanowiskach &gt; −65 dBm
 
 ## 9. Checklist dnia eventu
 
 - [ ] 3 AP na 2 m wokół operatorów (nie za makietą)
-- [ ] BigFred na porcie 1 (Priority), DHCP działa
+- [ ] Zestaw switch: BigFred na porcie 1 (Priority), `micronet status` → `gateway`, laptop z lease’em BigFreda
+- [ ] Zestaw MikroTik: ether1 = BigFred, ether2–5 = AP; `micronet status` → `client`/`static`; laptop z lease’em routera
 - [ ] Skan widma — ew. korekta 1/6/11
 - [ ] 3–5 pilotów testowych OK
 - [ ] Prośba do publiczności: wyłączyć hotspoty
@@ -146,6 +191,6 @@ To samo hasło dla obu.
 
 ## Uwagi techniczne
 
-- Narzędzia (workspace Rust): [`crates/configure-dhcp`](./crates/configure-dhcp/), [`crates/configure-ethernet`](./crates/configure-ethernet/) → `/usr/sbin/` na BigFred OS (artefakty GitHub Actions / Releases)
+- Daemon: [`crates/micronet`](../../crates/micronet/) → `/usr/sbin/micronet` na BigFred OS
 - Wspólne CI: reusable workflows w [`dcc-bigfred/common`](https://github.com/dcc-bigfred/common) (`@v2`); pobieranie binarek: `go run github.com/dcc-bigfred/common/cmd/fetch@latest`
-- Szczegółowe menu EAP613: [plans/2026-07-14-eap613-konfiguracja.md](./plans/2026-07-14-eap613-konfiguracja.md).
+- Szczegółowe menu EAP613: [plans/2026-07-14-eap613-konfiguracja.md](../../plans/2026-07-14-eap613-konfiguracja.md)

@@ -4,7 +4,7 @@ Data: 2026-07-14
 Autor analizy: czyste spojrzenie (bez oparcia o `docs/`)
 Status: projekt do wdrożenia i walidacji na miejscu
 
-**Instrukcja montażu (EN/PL):** [../README.md](../README.md) / [../README_pl.md](../README_pl.md)  
+**Instrukcja montażu (EN/PL):** [../docs/networking/README.md](../docs/networking/README.md) / [../docs/networking/README_pl.md](../docs/networking/README_pl.md)  
 **Instrukcja konfiguracji AP:** [2026-07-14-eap613-konfiguracja.md](./2026-07-14-eap613-konfiguracja.md)
 
 ---
@@ -60,9 +60,13 @@ Konsekwencja: cały projekt sprowadza się do **utrzymania czystego, mało obci�
 
 ## 4. Topologia (płaski L2, wired backhaul)
 
+Dwa zestawy L2 (wybór operatora). Daemon `micronet` nie rozpoznaje modelu — tylko DHCPDISCOVER + ping `gateway.ip`.
+
+**Zestaw A — switch PoE TL-SF1006P:** BigFred = brama i DHCP (`gateway`).
+
 ```mermaid
 flowchart TD
-  BigFred["BigFred (serwer, IP statyczny)"] -->|Ethernet| SW["Switch PoE TL-SF1006P (port 1 = Priority)"]
+  BigFred["BigFred (gateway plus dnsmasq)"] -->|Ethernet| SW["Switch PoE TL-SF1006P (port 1 = Priority)"]
   SW -->|"PoE + backhaul"| AP1["AP1 WiFi6 EAP613\n2.4G ch1\n5G ch36"]
   SW -->|"PoE + backhaul"| AP2["AP2 WiFi6 EAP613\n2.4G ch6\n5G ch149"]
   SW -->|"PoE + backhaul"| AP3["AP3 WiFi6 EAP613 (wariant A)\n2.4G ch11\n5G ch44"]
@@ -72,6 +76,16 @@ flowchart TD
   AP1 -. 5GHz .-> Fony["Telefony operatorow"]
   AP2 -. 5GHz .-> Fony
   AP3 -. 5GHz .-> Fony
+```
+
+**Zestaw B — MikroTik hEX PoE lite RB750UPr2:** DHCP na routerze; BigFred = `client` / `static` (bez własnego dnsmasq). ether1 = BigFred (bez PoE), ether2–5 PoE → AP.
+
+```mermaid
+flowchart TD
+  MT["MikroTik RB750UPr2 DHCP"] -->|ether1 no PoE| BF["BigFred client"]
+  MT -->|ether2 PoE| AP1r[AP1]
+  MT -->|ether3 PoE| AP2r[AP2]
+  MT -->|ether4 PoE| AP3r[AP3]
 ```
 
 - **Wariant A (rekomendowany)**: 3 AP na kanałach 2.4 GHz 1/6/11.
@@ -108,16 +122,23 @@ Dlaczego 3 AP w tym scenariuszu:
 - OFDMA, MU-MIMO, airtime fairness, band steering.
 - Lepszy w otwartej przestrzeni / przy montażu pod sufitem. Przy montażu 2 m w tłumie **2 punkty dają gorsze pokrycie niż 3 słabsze** — stąd niższy priorytet.
 
-### 5.3 Switch PoE (poza budżetem AP)
+### 5.3 Backhaul L2 (poza budżetem AP)
 
-**TP-Link TL-SF1006P** — w pełni wystarczający dla obu wariantów. ~130–160 zł.
+**TP-Link TL-SF1006P** — zestaw A. ~130–160 zł.
 
 - 6 portów, **4× PoE+ (802.3af/at, do 30 W/port, budżet 67 W)**, unmanaged, plug-and-play.
 - Dla 3 AP: 3 porty PoE na AP + 1 port na BigFreda = 4/6 portów zajęte. Pobór 3× ~11 W = **~33 W ≪ 67 W** budżetu.
 - **Fast Ethernet 10/100 Mb/s to zero problemu** przy potwierdzonym profilu ruchu (małe pakiety DCC + sporadyczne obrazki < 200 kB, brak internetu). 100 Mb/s full-duplex daje ogromny zapas, serializacja ramki ~0,12 ms — bez wpływu na cel < 25 ms.
 - Unmanaged pasuje do płaskiego L2 (bez VLAN). mDNS przejdzie (flood na małej sieci pomijalny), IGMP/multicast-to-unicast realizujemy na AP.
 - Bonus: **Priority Mode na portach 1–2** → podłączyć BigFreda pod port 1.
+- Na tym zestawie **BigFred jest bramą i serwerem DHCP** (`micronet` tryb `gateway`).
 - Gigabit (TL-SG1005P / SG1008P) tylko jeśli w przyszłości pojawi się cięższy ruch — obecnie zbędny.
+
+**MikroTik hEX PoE lite RB750UPr2** — zestaw B (gdy na evencie jest router z DHCP i 4× PoE na Omady).
+
+- 5× Fast Ethernet; **ether2–5 PoE**, ether1 bez PoE → BigFred.
+- DHCP na routerze → BigFred **nie** startuje dnsmasq (`client` albo `static` `.252`).
+- 3 AP + 1 zapas na ether2–5.
 
 ### 5.4 Czego unikać
 

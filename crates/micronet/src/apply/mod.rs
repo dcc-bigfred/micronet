@@ -6,10 +6,13 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{default_dnsmasq_conf_path, default_dnsmasq_leasefile, Config};
+use crate::config::{
+    default_dnsmasq_conf_path, default_dnsmasq_leasefile, default_dnsmasq_pidfile, Config,
+};
 use crate::constants::{DHCP_CLIENT_WAIT, REQUIRED_PREFIX};
 use crate::dhcp;
 use crate::error::Result;
+use crate::net::addr::cidr_ipv4;
 use crate::net::probe::{self, read_mac};
 use crate::net::{LiveNet, NetOps};
 
@@ -39,6 +42,7 @@ impl Mode {
 pub struct Status {
     pub mode: Mode,
     pub iface: String,
+    /// Real IPv4 prefix (`a.b.c.d/24`) or `None` if unassigned.
     pub cidr: Option<String>,
     pub foreign_dhcp: bool,
     pub gateway_reachable: bool,
@@ -58,7 +62,7 @@ impl Status {
         }
     }
 
-    /// Liveness: interface has an IPv4 (CIDR recorded).
+    /// Cached snapshot has an IPv4 CIDR recorded (not a live check).
     #[must_use]
     pub fn is_up(&self) -> bool {
         self.cidr.is_some() && !self.iface.is_empty()
@@ -80,10 +84,12 @@ pub fn decide(foreign_dhcp: bool, gateway_reachable: bool) -> Mode {
 /// How apply should probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProbePolicy {
-    /// Full DHCPDISCOVER + ping (start, IPC reconfigure, client/static reload).
+    /// Stop our dnsmasq, then DHCPDISCOVER + ping (start, IPC reconfigure).
     Full,
     /// Skip DHCPDISCOVER (we may be serving). Ping `gateway.ip` unless it is ours.
     SkipDhcpWhileGateway,
+    /// Foreign DHCP already proved; stop our dnsmasq and start dhclient.
+    BecomeClient,
 }
 
 /// DHCP server + probe, injectable in tests (must not import `ipc`).
@@ -91,7 +97,12 @@ pub trait GatewayCtl {
     fn dhcp_running(&self) -> bool;
     fn dhcp_stop(&self) -> Result<()>;
     fn dhcp_reload_or_restart(&self, cfg: &Config, iface: &str) -> Result<()>;
-    fn probe_foreign_dhcp(&self, iface: &str, timeout: Duration) -> bool;
+    fn probe_foreign_dhcp(
+        &self,
+        iface: &str,
+        timeout: Duration,
+        ignore_servers: &[Ipv4Addr],
+    ) -> Result<bool>;
 }
 
 /// Live dnsmasq + DHCPDISCOVER.
@@ -109,29 +120,23 @@ impl GatewayCtl for LiveGateway {
     fn dhcp_reload_or_restart(&self, cfg: &Config, iface: &str) -> Result<()> {
         let conf_path = default_dnsmasq_conf_path();
         let leasefile = default_dnsmasq_leasefile();
+        let pidfile = default_dnsmasq_pidfile();
         if let Some(parent) = leasefile.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let body = dhcp::render_conf(cfg, iface, &leasefile);
+        let body = dhcp::render_conf(cfg, iface, &leasefile, &pidfile);
         let changed = dhcp::conf::ensure_conf(&conf_path, &body)?;
         dhcp::reload_or_restart(&conf_path, changed)
     }
 
-    fn probe_foreign_dhcp(&self, iface: &str, timeout: Duration) -> bool {
-        let mac = match read_mac(Path::new("/sys/class/net"), iface) {
-            Ok(m) => m,
-            Err(e) => {
-                log::warn!("MAC read failed ({e}); treating as no foreign DHCP");
-                return false;
-            }
-        };
-        match probe::probe_foreign_dhcp(iface, &mac, timeout) {
-            Ok(v) => v,
-            Err(e) => {
-                log::warn!("DHCP probe failed ({e}); treating as no offer");
-                false
-            }
-        }
+    fn probe_foreign_dhcp(
+        &self,
+        iface: &str,
+        timeout: Duration,
+        ignore_servers: &[Ipv4Addr],
+    ) -> Result<bool> {
+        let mac = read_mac(Path::new("/sys/class/net"), iface)?;
+        probe::probe_foreign_dhcp(iface, &mac, timeout, ignore_servers)
     }
 }
 
@@ -150,7 +155,11 @@ pub fn apply_with<N: NetOps, G: GatewayCtl>(
     cfg.validate()?;
     let iface = net.resolve_iface(cfg.interface.as_deref())?;
     net.bring_up(&iface)?;
-    net.kill_dhclient()?;
+    net.stop_dhclient(&iface)?;
+
+    if policy == ProbePolicy::BecomeClient {
+        return apply_client(cfg, net, gw, &iface);
+    }
 
     let skip_dhcp = policy == ProbePolicy::SkipDhcpWhileGateway;
     let foreign_dhcp = if skip_dhcp {
@@ -160,7 +169,7 @@ pub fn apply_with<N: NetOps, G: GatewayCtl>(
             log::info!("stopping own dnsmasq before DHCP probe");
             gw.dhcp_stop()?;
         }
-        gw.probe_foreign_dhcp(&iface, Duration::from_secs(cfg.probe_timeout_secs))
+        gw.probe_foreign_dhcp(&iface, Duration::from_secs(cfg.probe_timeout_secs), &[])?
     };
 
     let static_cidr = cfg.static_cidr();
@@ -188,6 +197,48 @@ pub fn apply_with<N: NetOps, G: GatewayCtl>(
     }
 }
 
+/// Stop managed dnsmasq/dhclient and flush the resolved iface.
+pub fn teardown_with<N: NetOps, G: GatewayCtl>(cfg: &Config, net: &N, gw: &G) -> Result<Status> {
+    cfg.validate()?;
+    let iface = net.resolve_iface(cfg.interface.as_deref())?;
+    gw.dhcp_stop()?;
+    net.stop_dhclient(&iface)?;
+    net.flush_addr(&iface)?;
+    net.del_default()?;
+    Ok(Status {
+        mode: Mode::Gateway,
+        iface,
+        cidr: None,
+        foreign_dhcp: false,
+        gateway_reachable: false,
+        dnsmasq_running: gw.dhcp_running(),
+    })
+}
+
+pub fn teardown(cfg: &Config) -> Result<Status> {
+    teardown_with(cfg, &LiveNet::new(), &LiveGateway)
+}
+
+/// Live liveness: empty iface fails; no carrier succeeds (avoid unplug restart loops);
+/// with carrier require a live IPv4 plus the process that belongs to the mode.
+#[must_use]
+pub fn live_health<N: NetOps, G: GatewayCtl>(mode: Mode, iface: &str, net: &N, gw: &G) -> bool {
+    if iface.is_empty() {
+        return false;
+    }
+    if !net.carrier_up(iface) {
+        return true;
+    }
+    if net.iface_ipv4_cidr(iface).is_none() {
+        return false;
+    }
+    match mode {
+        Mode::Gateway => gw.dhcp_running(),
+        Mode::Client => net.dhclient_running(iface),
+        Mode::Static => true,
+    }
+}
+
 fn apply_client<N: NetOps, G: GatewayCtl>(
     cfg: &Config,
     net: &N,
@@ -198,13 +249,11 @@ fn apply_client<N: NetOps, G: GatewayCtl>(
     gw.dhcp_stop()?;
     net.flush_addr(iface)?;
     net.start_dhclient(iface)?;
-    let got = net.wait_ipv4(iface, DHCP_CLIENT_WAIT);
-    let cidr = if got {
-        Some(format!("{iface} dhcp"))
-    } else {
+    let _ = net.wait_ipv4(iface, DHCP_CLIENT_WAIT);
+    let cidr = net.iface_ipv4_cidr(iface);
+    if cidr.is_none() {
         log::warn!("dhclient did not assign an address within {DHCP_CLIENT_WAIT:?}");
-        None
-    };
+    }
     Ok(Status {
         mode: Mode::Client,
         iface: iface.to_string(),
@@ -278,6 +327,18 @@ pub fn decide_status(
     }
 }
 
+/// Ignore list for a periodic gateway probe: configured gateway.ip plus local inet.
+#[must_use]
+pub fn periodic_ignore_servers(cfg: &Config, local_cidr: Option<&str>) -> Vec<Ipv4Addr> {
+    let mut ignore = vec![cfg.gateway.ip];
+    if let Some(ip) = local_cidr.and_then(cidr_ipv4) {
+        if !ignore.contains(&ip) {
+            ignore.push(ip);
+        }
+    }
+    ignore
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -293,6 +354,7 @@ mod tests {
         addrs: Mutex<Vec<Ipv4Addr>>,
         dhclient: Mutex<bool>,
         default_via: Mutex<Option<Ipv4Addr>>,
+        carrier: bool,
     }
 
     impl FakeNet {
@@ -302,6 +364,7 @@ mod tests {
                 addrs: Mutex::new(Vec::new()),
                 dhclient: Mutex::new(false),
                 default_via: Mutex::new(None),
+                carrier: true,
             }
         }
     }
@@ -336,22 +399,38 @@ mod tests {
             self.addrs.lock().unwrap().push(ip);
             Ok(())
         }
-        fn iface_has_ipv4(&self, _iface: &str) -> bool {
-            !self.addrs.lock().unwrap().is_empty() || *self.dhclient.lock().unwrap()
+        fn iface_has_ipv4(&self, iface: &str) -> bool {
+            self.iface_ipv4_cidr(iface).is_some()
         }
         fn iface_has_addr(&self, _iface: &str, ip: Ipv4Addr) -> bool {
             self.addrs.lock().unwrap().contains(&ip)
         }
+        fn iface_ipv4_cidr(&self, _iface: &str) -> Option<String> {
+            if *self.dhclient.lock().unwrap() {
+                return Some("192.168.0.50/24".into());
+            }
+            self.addrs
+                .lock()
+                .unwrap()
+                .first()
+                .map(|ip| format!("{ip}/{REQUIRED_PREFIX}"))
+        }
+        fn carrier_up(&self, _iface: &str) -> bool {
+            self.carrier
+        }
         fn ping(&self, _host: Ipv4Addr) -> bool {
             self.ping_ok
         }
-        fn kill_dhclient(&self) -> Result<()> {
+        fn stop_dhclient(&self, _iface: &str) -> Result<()> {
             *self.dhclient.lock().unwrap() = false;
             Ok(())
         }
         fn start_dhclient(&self, _iface: &str) -> Result<()> {
             *self.dhclient.lock().unwrap() = true;
             Ok(())
+        }
+        fn dhclient_running(&self, _iface: &str) -> bool {
+            *self.dhclient.lock().unwrap()
         }
         fn wait_ipv4(&self, iface: &str, _timeout: Duration) -> bool {
             self.iface_has_ipv4(iface)
@@ -368,6 +447,7 @@ mod tests {
 
     struct FakeGw {
         offer: bool,
+        fail_probe: bool,
         running: Mutex<bool>,
         started: Mutex<bool>,
     }
@@ -376,6 +456,7 @@ mod tests {
         fn new(offer: bool) -> Self {
             Self {
                 offer,
+                fail_probe: false,
                 running: Mutex::new(false),
                 started: Mutex::new(false),
             }
@@ -395,8 +476,16 @@ mod tests {
             *self.started.lock().unwrap() = true;
             Ok(())
         }
-        fn probe_foreign_dhcp(&self, _iface: &str, _timeout: Duration) -> bool {
-            self.offer
+        fn probe_foreign_dhcp(
+            &self,
+            _iface: &str,
+            _timeout: Duration,
+            _ignore_servers: &[Ipv4Addr],
+        ) -> Result<bool> {
+            if self.fail_probe {
+                return Err(Error::DhcpProbe("bind failed".into()));
+            }
+            Ok(self.offer)
         }
     }
 
@@ -417,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_foreign_dhcp_is_client() {
+    fn apply_foreign_dhcp_is_client_with_real_cidr() {
         let cfg = Config::default();
         let net = FakeNet::new(false);
         let gw = FakeGw::new(true);
@@ -426,6 +515,8 @@ mod tests {
         assert!(s.foreign_dhcp);
         assert!(!*gw.started.lock().unwrap());
         assert!(*net.dhclient.lock().unwrap());
+        assert_eq!(s.cidr.as_deref(), Some("192.168.0.50/24"));
+        assert!(!s.cidr.as_deref().unwrap().contains("dhcp"));
     }
 
     #[test]
@@ -450,5 +541,89 @@ mod tests {
         assert_eq!(s.cidr.as_deref(), Some("192.168.0.1/24"));
         assert!(*gw.started.lock().unwrap());
         assert!(net.default_via.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn probe_err_does_not_start_dnsmasq() {
+        let cfg = Config::default();
+        let net = FakeNet::new(false);
+        let mut gw = FakeGw::new(false);
+        gw.fail_probe = true;
+        let err = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap_err();
+        assert!(matches!(err, Error::DhcpProbe(_)));
+        assert!(!*gw.started.lock().unwrap());
+        assert!(!*gw.running.lock().unwrap());
+    }
+
+    #[test]
+    fn become_client_stops_dnsmasq_without_probe() {
+        let cfg = Config::default();
+        let net = FakeNet::new(false);
+        let gw = FakeGw::new(false);
+        *gw.running.lock().unwrap() = true;
+        let s = apply_with(&cfg, ProbePolicy::BecomeClient, &net, &gw).unwrap();
+        assert_eq!(s.mode, Mode::Client);
+        assert!(!*gw.running.lock().unwrap());
+        assert!(!*gw.started.lock().unwrap());
+        assert!(*net.dhclient.lock().unwrap());
+        assert_eq!(s.cidr.as_deref(), Some("192.168.0.50/24"));
+    }
+
+    #[test]
+    fn teardown_stops_managed_state() {
+        let cfg = Config::default();
+        let net = FakeNet::new(false);
+        let gw = FakeGw::new(false);
+        *gw.running.lock().unwrap() = true;
+        *net.dhclient.lock().unwrap() = true;
+        net.addrs
+            .lock()
+            .unwrap()
+            .push(Ipv4Addr::new(192, 168, 0, 1));
+        let s = teardown_with(&cfg, &net, &gw).unwrap();
+        assert!(s.cidr.is_none());
+        assert!(!*gw.running.lock().unwrap());
+        assert!(!*net.dhclient.lock().unwrap());
+        assert!(net.addrs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn live_health_matrix() {
+        let net = FakeNet::new(false);
+        let gw = FakeGw::new(false);
+        assert!(!live_health(Mode::Gateway, "", &net, &gw));
+
+        *gw.running.lock().unwrap() = true;
+        net.addrs
+            .lock()
+            .unwrap()
+            .push(Ipv4Addr::new(192, 168, 0, 1));
+        assert!(live_health(Mode::Gateway, "eth0", &net, &gw));
+        *gw.running.lock().unwrap() = false;
+        assert!(!live_health(Mode::Gateway, "eth0", &net, &gw));
+
+        let mut down = FakeNet::new(false);
+        down.carrier = false;
+        assert!(live_health(Mode::Gateway, "eth0", &down, &gw));
+
+        *net.dhclient.lock().unwrap() = true;
+        assert!(live_health(Mode::Client, "eth0", &net, &gw));
+        *net.dhclient.lock().unwrap() = false;
+        net.addrs.lock().unwrap().clear();
+        net.addrs
+            .lock()
+            .unwrap()
+            .push(Ipv4Addr::new(192, 168, 0, 252));
+        assert!(!live_health(Mode::Client, "eth0", &net, &gw));
+        assert!(live_health(Mode::Static, "eth0", &net, &gw));
+    }
+
+    #[test]
+    fn periodic_ignore_includes_gateway_and_local() {
+        let cfg = Config::default();
+        let v = periodic_ignore_servers(&cfg, Some("192.168.0.1/24"));
+        assert_eq!(v, vec![cfg.gateway.ip]);
+        let v = periodic_ignore_servers(&cfg, Some("192.168.0.50/24"));
+        assert_eq!(v, vec![cfg.gateway.ip, Ipv4Addr::new(192, 168, 0, 50)]);
     }
 }

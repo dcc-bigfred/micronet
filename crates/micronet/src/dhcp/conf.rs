@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 
 /// Render a gateway-mode dnsmasq config.
 #[must_use]
-pub fn render_conf(cfg: &Config, iface: &str, leasefile: &Path) -> String {
+pub fn render_conf(cfg: &Config, iface: &str, leasefile: &Path, pidfile: &Path) -> String {
     let mask = cfg.gateway.subnet.netmask();
     let start = cfg.range_start_addr();
     let end = cfg.range_end_addr();
@@ -24,9 +24,11 @@ dhcp-range={start},{end},{mask},{sticky}
 dhcp-option=option:router,{gw}
 dhcp-option=option:dns-server,{gw}
 dhcp-leasefile={lease}
+pid-file={pid}
 dhcp-authoritative
 ",
         lease = leasefile.display(),
+        pid = pidfile.display(),
     )
 }
 
@@ -55,11 +57,17 @@ mod tests {
     #[test]
     fn render_contains_sticky_7d() {
         let cfg = Config::default();
-        let body = render_conf(&cfg, "eth0", Path::new("/data/etc/dnsmasq.leases"));
+        let body = render_conf(
+            &cfg,
+            "eth0",
+            Path::new("/data/etc/dnsmasq.leases"),
+            Path::new("/data/run/dnsmasq.pid"),
+        );
         assert!(body.contains("7d"));
         assert!(body.contains("dhcp-authoritative"));
         assert!(body.contains("option:router,192.168.0.1"));
         assert!(body.contains("dhcp-range=192.168.0.50,192.168.0.200"));
+        assert!(body.contains("pid-file=/data/run/dnsmasq.pid"));
         assert!(!body.contains("dhcp-host="));
         // DNS listener must stay on: we hand out option:dns-server = gateway.ip.
         assert!(!body.contains("port=0"));
@@ -71,9 +79,15 @@ mod tests {
         cfg.gateway.ip = Ipv4Addr::new(10, 0, 10, 1);
         cfg.gateway.subnet = "10.0.10.0/24".parse().unwrap();
         cfg.dhcp.sticky = "7d".into();
-        let body = render_conf(&cfg, "eth0", &PathBuf::from("/tmp/leases"));
+        let body = render_conf(
+            &cfg,
+            "eth0",
+            &PathBuf::from("/tmp/leases"),
+            &PathBuf::from("/tmp/dnsmasq.pid"),
+        );
         assert!(body.contains("listen-address=10.0.10.1"));
         assert!(body.contains("10.0.10.50,10.0.10.200"));
         assert!(body.contains(",7d"));
+        assert!(body.contains("pid-file=/tmp/dnsmasq.pid"));
     }
 }

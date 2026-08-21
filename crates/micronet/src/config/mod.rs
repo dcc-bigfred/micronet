@@ -38,6 +38,27 @@ pub fn default_dnsmasq_leasefile() -> PathBuf {
     datadir::path(["etc", "dnsmasq.leases"])
 }
 
+#[must_use]
+pub fn default_dnsmasq_pidfile() -> PathBuf {
+    datadir::path(["run", "dnsmasq.pid"])
+}
+
+/// Per-iface dhclient pidfile (`$DATA_DIR/run/dhclient.<iface>.pid`).
+#[must_use]
+pub fn dhclient_pidfile(iface: &str) -> PathBuf {
+    let mut p = datadir::path(["run"]);
+    p.push(format!("dhclient.{iface}.pid"));
+    p
+}
+
+/// Per-iface dhclient leasefile (`$DATA_DIR/etc/dhclient.<iface>.leases`).
+#[must_use]
+pub fn dhclient_leasefile(iface: &str) -> PathBuf {
+    let mut p = datadir::path(["etc"]);
+    p.push(format!("dhclient.{iface}.leases"));
+    p
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayConfig {
@@ -176,6 +197,11 @@ impl Config {
             if name.is_empty() {
                 return Err(Error::Config("interface must not be empty".into()));
             }
+            if name.contains('/') || name.contains('\0') {
+                return Err(Error::Config(
+                    "interface must be a simple device name".into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -291,6 +317,15 @@ mod tests {
     #[test]
     fn defaults_validate() {
         Config::default().validate().unwrap();
+    }
+
+    #[test]
+    fn interface_path_rejected() {
+        let c = Config {
+            interface: Some("eth0/evil".into()),
+            ..Config::default()
+        };
+        assert!(c.validate().is_err());
     }
 
     #[test]

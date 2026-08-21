@@ -81,7 +81,7 @@ flowchart TD
 
 ```
 crates/micronet/src/
-  main.rs, lib.rs, error.rs, datadir.rs, constants.rs, version.rs, signals.rs
+  main.rs, lib.rs, error.rs, datadir.rs, constants.rs, version.rs, signals.rs, pidfile.rs
   config/     JSON + inotify watch
   net/        physical Ethernet, probe, addr
   dhcp/       dnsmasq conf + process
@@ -101,11 +101,12 @@ ARCHITECTURE.md
 | Dir | Job |
 |---|---|
 | `config` | camelCase JSON, validate, load_or_create (example **without** `socket`), inotify debounce ~300 ms |
-| `net` | iface filter, `ip` / `ping` / `dhclient`, DHCPDISCOVER encode/probe |
-| `dhcp` | render `dnsmasq.conf`, start / SIGHUP / restart / stop |
-| `apply` | probe policy, mode apply |
+| `net` | iface filter, `ip` / `ping` / pidfile-owned `dhclient`, DHCPDISCOVER encode/probe |
+| `dhcp` | render `dnsmasq.conf`, start / SIGHUP / restart / stop (pidfile only) |
+| `pidfile` | TERM/KILL one process; never `killall` |
+| `apply` | probe policy, mode apply, teardown, live health |
 | `ipc` | `bind_singleton`, framing |
-| `daemon` | watch + IPC + apply; socket path is **not** hot-reloaded |
+| `daemon` | watch + IPC + apply + gateway recheck; socket path is **not** hot-reloaded |
 
 `net` and `dhcp` MUST NOT import `ipc`.
 
@@ -113,20 +114,42 @@ ARCHITECTURE.md
 
 ## 6. Mode selection
 
-1. Link up, no address; kill leftover `dhclient`.
-2. If currently serving DHCP, stop dnsmasq before a full probe (do not
+1. Link up, no address; stop **our** leftover `dhclient` (per-iface pidfile).
+2. If currently serving DHCP, stop **our** dnsmasq before a full probe (do not
    offer to ourselves).
-3. DHCPDISCOVER, wait `probeTimeoutSecs` for DHCPOFFER.
-4. Offer → `client`.
-5. Else assign `staticHost` (default **252**), ping `gateway.ip`
+3. DHCPDISCOVER, wait `probeTimeoutSecs` for a DHCPOFFER that matches
+   `xid`, `chaddr`, `BootReply`, Ethernet, option 53 = Offer.
+4. Probe **errors** (bind, `SO_BINDTODEVICE`, send) abort apply — fail
+   closed. Do **not** start dnsmasq when the probe did not complete.
+5. Valid offer → `client` (`dhclient -nw` with pidfile/leasefile).
+6. Else assign `staticHost` (default **252**), ping `gateway.ip`
    (`-c 1 -W 2`). If `gateway.ip` is already local, treat ping as fail
    (stay / become gateway).
-6. Ping OK → `static` (keep `.252`, `default via gateway.ip`, stop dnsmasq).
-7. Ping fail → `gateway` (drop `.252`, `gateway.ip/prefix`, dnsmasq,
+7. Ping OK → `static` (keep `.252`, `default via gateway.ip`, stop dnsmasq).
+8. Ping fail → `gateway` (drop `.252`, `gateway.ip/prefix`, dnsmasq,
    **no** default route).
+
+`status.cidr` is always a real IPv4 prefix (`a.b.c.d/24`) or `null`.
 
 `staticHost` MUST lie in the `/24`, differ from `gateway.ip`, and sit
 outside `[rangeStart, rangeEnd]`.
+
+### 6.1 Gateway yield (foreign DHCP appears later)
+
+While `mode == gateway`, every `GATEWAY_FOREIGN_DHCP_INTERVAL` (15 s)
+the daemon sends DHCPDISCOVER **without** stopping dnsmasq (one in-flight
+probe, off the main loop). Offers from our own server-id / local inet
+are ignored. A foreign offer → stop **our** dnsmasq immediately and
+become `client`. Yield is **one-way**; returning to gateway requires
+`reconfigure` or a process restart.
+
+Periodic probe errors stay gateway (already serving; uncertainty is not
+a yield). JSON reload while gateway still skips DISCOVER (`SkipDhcpWhileGateway`);
+the periodic probe covers “router appeared later.” IPC `reconfigure` is
+always a full probe.
+
+Process ownership: `$DATA_DIR/run/dnsmasq.pid` and
+`$DATA_DIR/run/dhclient.<iface>.pid`. Never `killall`.
 
 Two operator kits (daemon only sees DHCP + ping):
 
@@ -168,17 +191,29 @@ Requests `{ "type": "status" | "info" | "reconfigure" }`.
 `status` fields (camelCase): `mode`, `iface`, `cidr`, `foreignDhcp`,
 `gatewayReachable`, `dnsmasqRunning`.
 
-CLI: `serve` / `run` (default), `apply`, `status`, `check` (exit 0 when
-iface + IPv4 via socket), `reconfigure`, `info`. Global `--config`,
-`--socket`, `--data-dir`. Relative `--socket` / `--config` join under
-the data root; absolute `--socket` is CLI-only (tests).
+CLI: `serve` / `run` (default), `apply`, `status`, `check`, `teardown`,
+`reconfigure`, `info`. Global `--config`, `--socket`, `--data-dir`.
+Relative `--socket` / `--config` join under the data root; absolute
+`--socket` is CLI-only (tests).
+
+`micronet check` (microinit): IPC must succeed, then **live** health —
+ignore cached `cidr`. No carrier → success (do not restart on unplug).
+Carrier up requires a live IPv4 and the owned process (`dnsmasq` in
+gateway, `dhclient` in client, address only in static).
+
+`configure-ethernet` / `configure-dhcp check`: same live check when the
+daemon socket answers; if the socket is missing, iface UP + IPv4 only
+(legacy one-shot after `apply` exited).
+
+`micronet teardown`: stop our dnsmasq and dhclient, flush the managed
+iface, delete the default route (full service stop).
 
 ---
 
 ## 9. Integration
 
 - microinit service `network`: `daemon: true`, `exec /usr/sbin/micronet serve`,
-  liveness `micronet check` (~20 s).
+  liveness `micronet check` (~20 s). Stop runs `micronet teardown`.
 - `configure-dhcp` service is removed.
 - bigfred-os fetch installs `/usr/sbin/micronet` (optional argv0 aliases).
 - Overlay `etc/micronet/micronet.json` seeds `$DATA_DIR/etc/micronet.json`

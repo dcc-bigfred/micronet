@@ -40,6 +40,12 @@ pub enum Error {
     #[error("dnsmasq binary not found at {0}")]
     DnsmasqMissing(PathBuf),
 
+    #[error("dhclient binary not found at {0}")]
+    DhclientMissing(PathBuf),
+
+    #[error("DHCP probe: {0}")]
+    DhcpProbe(String),
+
     #[error("{0}")]
     Other(String),
 }

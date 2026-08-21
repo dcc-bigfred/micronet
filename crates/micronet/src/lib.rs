@@ -9,6 +9,7 @@ pub mod dhcp;
 pub mod error;
 pub mod ipc;
 pub mod net;
+pub mod pidfile;
 pub mod signals;
 pub mod version;
 

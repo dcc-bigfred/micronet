@@ -8,6 +8,7 @@ DHCPDISCOVER probe and a ping of `gateway.ip`.
 ## Features
 
 - Three modes: foreign DHCP → `client` (`dhclient`); live `gateway.ip` → `static`; empty LAN → `gateway` + dnsmasq
+- If a router/DHCP server appears later, gateway mode **yields**: stops dnsmasq and runs `dhclient`
 - DHCPDISCOVER only (no REQUEST); ICMP ping of `gateway.ip` after a temporary `.252`
 - dnsmasq only in `gateway` (pool `.50–.200`, sticky MAC→IP lease **7d**, `option:router` / `dns-server`)
 - Physical Ethernet only (not `lo`, bridge, virtual, Wi-Fi)

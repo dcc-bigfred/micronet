@@ -48,6 +48,8 @@ enum Commands {
     Check,
     /// Re-run DHCP probe + apply
     Reconfigure,
+    /// Stop managed dnsmasq/dhclient and flush addresses (service stop)
+    Teardown,
     /// Print build / release metadata
     Info,
 }
@@ -79,6 +81,7 @@ fn main() -> ExitCode {
         cli.command.unwrap_or(Commands::Serve),
         &config_path,
         &socket,
+        daemon::CheckStyle::Daemon,
     )
 }
 
@@ -115,6 +118,10 @@ fn alias_main(argv0: &str) -> ExitCode {
                 cmd = "serve";
                 i += 1;
             }
+            "teardown" | "stop" => {
+                cmd = "teardown";
+                i += 1;
+            }
             other if other.starts_with('-') => {
                 eprintln!("{argv0}: unknown option {other}");
                 return ExitCode::FAILURE;
@@ -133,12 +140,23 @@ fn alias_main(argv0: &str) -> ExitCode {
     let command = match cmd {
         "serve" => Commands::Serve,
         "check" => Commands::Check,
+        "teardown" => Commands::Teardown,
         _ => Commands::Apply,
     };
-    dispatch(command, &config_path, &socket_path)
+    dispatch(
+        command,
+        &config_path,
+        &socket_path,
+        daemon::check_style_from_argv0(argv0),
+    )
 }
 
-fn dispatch(command: Commands, config_path: &Path, socket: &Path) -> ExitCode {
+fn dispatch(
+    command: Commands,
+    config_path: &Path,
+    socket: &Path,
+    check_style: daemon::CheckStyle,
+) -> ExitCode {
     match command {
         Commands::Serve | Commands::Run => {
             env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -181,7 +199,18 @@ fn dispatch(command: Commands, config_path: &Path, socket: &Path) -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Commands::Check => match daemon::check_liveness(socket) {
+        Commands::Teardown => {
+            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+                .init();
+            match daemon::teardown(config_path) {
+                Ok(_) => ExitCode::SUCCESS,
+                Err(e) => {
+                    log::error!("{e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Commands::Check => match daemon::check_liveness(socket, config_path, check_style) {
             Ok(true) => ExitCode::SUCCESS,
             Ok(false) => ExitCode::FAILURE,
             Err(e) => {

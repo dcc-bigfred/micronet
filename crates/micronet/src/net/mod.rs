@@ -7,10 +7,12 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::config;
 use crate::constants::{
     ARPHRD_ETHER, DHCLIENT_BIN, IP_BIN, PING_BIN, PING_COUNT, PING_TIMEOUT_SEC,
 };
 use crate::error::{Error, Result};
+use crate::pidfile;
 
 pub mod addr;
 pub mod probe;
@@ -29,9 +31,13 @@ pub trait NetOps {
     fn add_addr(&self, iface: &str, cidr: &str) -> Result<()>;
     fn iface_has_ipv4(&self, iface: &str) -> bool;
     fn iface_has_addr(&self, iface: &str, ip: Ipv4Addr) -> bool;
+    fn iface_ipv4_cidr(&self, iface: &str) -> Option<String>;
+    fn carrier_up(&self, iface: &str) -> bool;
     fn ping(&self, host: Ipv4Addr) -> bool;
-    fn kill_dhclient(&self) -> Result<()>;
+    /// Stop the dhclient instance owned for `iface` (pidfile). Returns after daemonize, not after ACK.
+    fn stop_dhclient(&self, iface: &str) -> Result<()>;
     fn start_dhclient(&self, iface: &str) -> Result<()>;
+    fn dhclient_running(&self, iface: &str) -> bool;
     fn wait_ipv4(&self, iface: &str, timeout: Duration) -> bool;
     fn replace_default_via(&self, gw: Ipv4Addr, iface: &str) -> Result<()>;
     fn del_default(&self) -> Result<()>;
@@ -103,6 +109,14 @@ impl NetOps for LiveNet {
         iface_has_addr(iface, ip)
     }
 
+    fn iface_ipv4_cidr(&self, iface: &str) -> Option<String> {
+        iface_ipv4_cidr(iface)
+    }
+
+    fn carrier_up(&self, iface: &str) -> bool {
+        carrier_up(iface)
+    }
+
     fn ping(&self, host: Ipv4Addr) -> bool {
         run_cmd(
             PING_BIN,
@@ -111,17 +125,33 @@ impl NetOps for LiveNet {
         .is_ok()
     }
 
-    fn kill_dhclient(&self) -> Result<()> {
-        let _ = Command::new("/bin/killall")
-            .arg("dhclient")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        Ok(())
+    fn stop_dhclient(&self, iface: &str) -> Result<()> {
+        pidfile::stop(&config::dhclient_pidfile(iface), DHCLIENT_BIN)
     }
 
+    /// Spawn `dhclient -nw`; returns after the parent daemonizes, not after DHCPACK.
     fn start_dhclient(&self, iface: &str) -> Result<()> {
-        run_cmd(DHCLIENT_BIN, &[iface])
+        if !Path::new(DHCLIENT_BIN).is_file() {
+            return Err(Error::DhclientMissing(PathBuf::from(DHCLIENT_BIN)));
+        }
+        let pid_path = config::dhclient_pidfile(iface);
+        let lease_path = config::dhclient_leasefile(iface);
+        if let Some(parent) = pid_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| Error::io_at(parent, e))?;
+        }
+        if let Some(parent) = lease_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| Error::io_at(parent, e))?;
+        }
+        let pid_s = pid_path.to_string_lossy();
+        let lease_s = lease_path.to_string_lossy();
+        run_cmd(
+            DHCLIENT_BIN,
+            &["-nw", "-pf", pid_s.as_ref(), "-lf", lease_s.as_ref(), iface],
+        )
+    }
+
+    fn dhclient_running(&self, iface: &str) -> bool {
+        pidfile::is_alive(&config::dhclient_pidfile(iface), DHCLIENT_BIN)
     }
 
     fn wait_ipv4(&self, iface: &str, timeout: Duration) -> bool {
@@ -150,10 +180,7 @@ impl NetOps for LiveNet {
 }
 
 fn cidr_ip(cidr: &str) -> Ipv4Addr {
-    cidr.split('/')
-        .next()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(Ipv4Addr::UNSPECIFIED)
+    addr::cidr_ipv4(cidr).unwrap_or(Ipv4Addr::UNSPECIFIED)
 }
 
 /// First physical Ethernet (sorted names), or an explicit name after the same filter.
@@ -227,34 +254,37 @@ pub fn list_physical_ethernet(sys_class_net: &Path) -> Result<Vec<String>> {
 }
 
 pub fn iface_has_ipv4(iface: &str) -> bool {
-    let Ok(out) = Command::new(IP_BIN)
-        .args(["-4", "addr", "show", "dev", iface])
-        .output()
-    else {
-        return false;
-    };
-    String::from_utf8_lossy(&out.stdout).contains("inet ")
+    iface_ipv4_cidr(iface).is_some()
 }
 
 pub fn iface_has_addr(iface: &str, ip: Ipv4Addr) -> bool {
-    let Ok(out) = Command::new(IP_BIN)
-        .args(["-4", "addr", "show", "dev", iface])
-        .output()
-    else {
-        return false;
-    };
-    String::from_utf8_lossy(&out.stdout).contains(&format!("inet {ip}/"))
+    iface_ipv4_cidr(iface)
+        .as_deref()
+        .is_some_and(|c| c.starts_with(&format!("{ip}/")))
 }
 
-pub fn iface_link_up(iface: &str) -> bool {
+pub fn iface_ipv4_cidr(iface: &str) -> Option<String> {
+    let out = Command::new(IP_BIN)
+        .args(["-4", "-o", "addr", "show", "dev", iface])
+        .output()
+        .ok()?;
+    addr::parse_first_inet_cidr(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Carrier detected (`/sys/class/net/<iface>/carrier` or `ip link` `state UP`).
+#[must_use]
+pub fn carrier_up(iface: &str) -> bool {
+    let sys = Path::new(DEFAULT_SYS_CLASS_NET).join(iface).join("carrier");
+    if let Ok(s) = fs::read_to_string(&sys) {
+        return s.trim() == "1";
+    }
     let Ok(out) = Command::new(IP_BIN)
         .args(["link", "show", "dev", iface])
         .output()
     else {
         return false;
     };
-    let s = String::from_utf8_lossy(&out.stdout);
-    s.contains("state UP") || s.contains(",UP")
+    String::from_utf8_lossy(&out.stdout).contains("state UP")
 }
 
 fn run_cmd(bin: &str, args: &[&str]) -> Result<()> {

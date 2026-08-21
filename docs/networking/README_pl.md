@@ -29,6 +29,8 @@ Po starcie daemon **`micronet`** (pierwszy fizyczny Ethernet):
    - ping OK → tryb **`static`**: zostań na `.252`, default via `gateway.ip`, bez dnsmasq
    - ping fail → tryb **`gateway`**: weź `gateway.ip` (seed obrazu: **`10.0.10.1/24`**), start **dnsmasq** (pula `.50–.200`, sticky **7d**, router/DNS = BigFred). **Bez default route.**
 
+Jeśli router pojawi się **później** (po tym, jak BigFred już został gatewayem), micronet wykryje obcy DHCP (okresowa sonda) i **ustąpi**: wyłączy dnsmasq i uruchomi `dhclient`. Kolejność włączania zestawu B to nadal „najpierw router”, ale późniejsze podłączenie jest obsłużone.
+
 Nie ma wykrywania Omady ani rezerwacji `dhcp-host=` per MAC. Stickiness to leasefile dnsmasq + `7d`.
 
 Typowe mapowanie:

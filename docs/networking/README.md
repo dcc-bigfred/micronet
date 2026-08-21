@@ -29,6 +29,8 @@ On boot, the **`micronet` daemon** (`eth0` / first physical Ethernet):
    - ping OK → mode **`static`**: stay on `.252`, default route via `gateway.ip`, no dnsmasq
    - ping fail → mode **`gateway`**: take `gateway.ip` (image seed: **`10.0.10.1/24`**), start **dnsmasq** (pool `.50–.200`, sticky lease **7d**, router/DNS = BigFred). **No default route.**
 
+If a router is plugged in or boots **after** BigFred already became gateway, micronet notices the foreign DHCP (periodic probe) and **yields**: stops dnsmasq and runs `dhclient`. Kit B power-on order is still “router first,” but a late plug-in is handled.
+
 There is no Omada detection and no per-MAC `dhcp-host=` reservations. Stickiness is the dnsmasq leasefile + `7d`.
 
 Typical mapping:

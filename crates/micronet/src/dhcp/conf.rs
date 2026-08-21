@@ -20,7 +20,6 @@ pub fn render_conf(cfg: &Config, iface: &str, leasefile: &Path) -> String {
 interface={iface}
 bind-interfaces
 listen-address={gw}
-port=0
 dhcp-range={start},{end},{mask},{sticky}
 dhcp-option=option:router,{gw}
 dhcp-option=option:dns-server,{gw}
@@ -62,6 +61,8 @@ mod tests {
         assert!(body.contains("option:router,192.168.0.1"));
         assert!(body.contains("dhcp-range=192.168.0.50,192.168.0.200"));
         assert!(!body.contains("dhcp-host="));
+        // DNS listener must stay on: we hand out option:dns-server = gateway.ip.
+        assert!(!body.contains("port=0"));
     }
 
     #[test]

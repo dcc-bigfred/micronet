@@ -5,13 +5,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::apply::{self, ProbePolicy, Status};
 use crate::config;
 use crate::error::{Error, Result};
 use crate::ipc::{self, IpcEvent, Shared};
+use crate::net::LiveNet;
+use crate::net::NetOps;
 use crate::signals;
+
+/// How often the daemon re-checks whether a slow `dhclient` lease arrived.
+const CLIENT_STATUS_REFRESH: Duration = Duration::from_secs(3);
 
 /// Run until SIGTERM/SIGINT.
 pub fn run(config_path: &Path, socket: &Path) -> Result<()> {
@@ -43,6 +48,8 @@ pub fn run(config_path: &Path, socket: &Path) -> Result<()> {
     signals::install(&stop)?;
 
     let config_path = config_path.to_path_buf();
+    let net = LiveNet::new();
+    let mut next_refresh = Instant::now() + CLIENT_STATUS_REFRESH;
     loop {
         if stop.load(Ordering::SeqCst) {
             break;
@@ -58,6 +65,10 @@ pub fn run(config_path: &Path, socket: &Path) -> Result<()> {
         }
         if event == Some(IpcEvent::Reconfigure) {
             on_reconfigure(&shared);
+        }
+        if Instant::now() >= next_refresh {
+            refresh_client_status(&shared, &net);
+            next_refresh = Instant::now() + CLIENT_STATUS_REFRESH;
         }
         thread::sleep(Duration::from_millis(0));
     }
@@ -122,6 +133,28 @@ fn on_reconfigure(shared: &Shared) {
             }
         }
         Err(e) => log::warn!("reconfigure failed: {e}"),
+    }
+}
+
+/// In client mode a `dhclient` lease can arrive after the short apply wait.
+/// Poll the interface and update the snapshot so `micronet check` liveness
+/// sees a non-empty `cidr` instead of restarting the service in a loop.
+fn refresh_client_status(shared: &Shared, net: &LiveNet) {
+    let (mode, iface, cidr) = match shared.status.read() {
+        Ok(s) => (s.mode, s.iface.clone(), s.cidr.clone()),
+        Err(_) => {
+            log::warn!("status lock poisoned");
+            return;
+        }
+    };
+    if mode != apply::Mode::Client || !cidr.is_none() || iface.is_empty() {
+        return;
+    }
+    if net.iface_has_ipv4(&iface) {
+        if let Ok(mut st) = shared.status.write() {
+            st.cidr = Some(format!("{iface} dhcp"));
+            log::info!("client lease acquired on {iface}");
+        }
     }
 }
 

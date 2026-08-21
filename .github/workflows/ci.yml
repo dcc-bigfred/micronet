@@ -22,6 +22,5 @@ jobs:
     with:
       binaries: |
         [
-          {"name":"configure-dhcp","dist":"configure-dhcp-linux"},
-          {"name":"configure-ethernet","dist":"configure-ethernet-linux"}
+          {"name":"micronet","dist":"micronet-linux"}
         ]

@@ -20,10 +20,13 @@ release-musl:
 	RUSTFLAGS='-C target-feature=+crt-static' \
 		$(CARGO) build --workspace --release --target $(TARGET_MUSL)
 	@mkdir -p dist
-	cp -f target/$(TARGET_MUSL)/release/configure-dhcp dist/configure-dhcp-linux-arm64
-	cp -f target/$(TARGET_MUSL)/release/configure-ethernet dist/configure-ethernet-linux-arm64
-	@chmod 755 dist/configure-dhcp-linux-arm64 dist/configure-ethernet-linux-arm64
-	@echo "wrote dist/configure-*-linux-arm64"
+	cp -f target/$(TARGET_MUSL)/release/micronet dist/micronet-linux-arm64
+	# One-release aliases so older fetch scripts still find a file.
+	cp -f dist/micronet-linux-arm64 dist/configure-dhcp-linux-arm64
+	cp -f dist/micronet-linux-arm64 dist/configure-ethernet-linux-arm64
+	@chmod 755 dist/micronet-linux-arm64 \
+		dist/configure-dhcp-linux-arm64 dist/configure-ethernet-linux-arm64
+	@echo "wrote dist/micronet-linux-arm64 (+ configure-* aliases)"
 
 check:
 	$(CARGO) check --workspace

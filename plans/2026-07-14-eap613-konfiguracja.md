@@ -2,7 +2,7 @@
 
 Data: 2026-07-14  
 Powiązany plan: [2026-07-14-topologia-wifi-hala.md](./2026-07-14-topologia-wifi-hala.md)  
-Montaż krok po kroku: [../README.md](../README.md) (EN) / [../README_pl.md](../README_pl.md) (PL)  
+Montaż krok po kroku: [../docs/networking/README.md](../docs/networking/README.md) (EN) / [../docs/networking/README_pl.md](../docs/networking/README_pl.md) (PL)  
 Tryb: **Standalone** (bez kontrolera Omada, bez internetu) — OC200 opcjonalny, patrz README
 
 ---
@@ -13,7 +13,7 @@ Tryb: **Standalone** (bez kontrolera Omada, bez internetu) — OC200 opcjonalny,
 |---------|-------|------|
 | TP-Link EAP613 | 3 | WiFi dla WiFredów (2.4 GHz) i telefonów (5 GHz) |
 | TP-Link TL-SF1006P | 1 | PoE + L2 switch |
-| BigFred | 1 | Serwer, DHCP, mDNS, WebSocket DCC |
+| BigFred | 1 | Serwer; DHCP tylko na zestawie switch (tryb `gateway`) |
 
 **Cel:** latency WiFi < 25 ms dla ~40 klientów sterujących.
 
@@ -39,6 +39,29 @@ BigFred ──port 1──► TL-SF1006P ◄──port 2── AP1 (EAP613)
 Na switchu:
 - **Extend Mode: OFF** (inaczej porty spadną do 10 Mb/s).
 - **Priority Mode: ON** (port 1 ma priorytet).
+
+Na tym zestawie **BigFred jest serwerem DHCP** (`micronet` tryb `gateway`).
+
+Montaż AP: **2 m**, dysk poziomo na maszcie/statywie, wokół strefy operatorów (nie za makietą przy publiczności).
+
+### 2b. Alternatywa: MikroTik hEX PoE lite RB750UPr2
+
+Gdy backhaulem jest router (DHCP na MikroTiku), BigFred **nie** serwuje DHCP.
+
+```
+BigFred ──ether1 (bez PoE)──► RB750UPr2 ◄──ether2── AP1 (PoE)
+                                       ◄──ether3── AP2 (PoE)
+                                       ◄──ether4── AP3 (PoE)
+                                       ether5 zapas
+```
+
+| Port | Urządzenie | Uwagi |
+|------|------------|-------|
+| ether1 | BigFred | bez PoE |
+| ether2 | AP1 | PoE |
+| ether3 | AP2 | PoE |
+| ether4 | AP3 | PoE |
+| ether5 | zapas / laptop | PoE |
 
 Montaż AP: **2 m**, dysk poziomo na maszcie/statywie, wokół strefy operatorów (nie za makietą przy publiczności).
 

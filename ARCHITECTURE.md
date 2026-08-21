@@ -38,8 +38,8 @@ installs the connected route. This task does **not** enable
 9. **arm64 musl** static binary. Clippy deny `unwrap_used` / `expect_used`
    / `panic` / `todo` (workspace lints).
 10. **Binary defaults** `192.168.0.1/24`. BigFred OS seeds
-    `$DATA_DIR/etc/micronet.json` to **`10.0.10.1` / `10.0.10.0/24`**
-    when the file is missing.
+    `$DATA_DIR/etc/micronet.json` from the image overlay (**`192.168.0.1` /
+    `192.168.0.0/24`**) when the file is missing.
 
 ---
 
@@ -217,4 +217,4 @@ iface, delete the default route (full service stop).
 - `configure-dhcp` service is removed.
 - bigfred-os fetch installs `/usr/sbin/micronet` (optional argv0 aliases).
 - Overlay `etc/micronet/micronet.json` seeds `$DATA_DIR/etc/micronet.json`
-  **only if missing** (operator edits survive), event subnet `10.0.10.0/24`.
+  **only if missing** (operator edits survive), default subnet `192.168.0.0/24`.

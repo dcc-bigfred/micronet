@@ -28,6 +28,7 @@ pub const IP_BIN: &str = "/sbin/ip";
 pub const DHCLIENT_BIN: &str = "/sbin/dhclient";
 pub const PING_BIN: &str = "/bin/ping";
 pub const DNSMASQ_BIN: &str = "/usr/sbin/dnsmasq";
+pub const ETHTOOL_BIN: &str = "/usr/sbin/ethtool";
 
 pub const DEFAULT_STICKY: &str = "7d";
 pub const DEFAULT_RANGE_START: u8 = 50;

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::config;
 use crate::constants::{
-    ARPHRD_ETHER, DHCLIENT_BIN, IP_BIN, PING_BIN, PING_COUNT, PING_TIMEOUT_SEC,
+    ARPHRD_ETHER, DHCLIENT_BIN, ETHTOOL_BIN, IP_BIN, PING_BIN, PING_COUNT, PING_TIMEOUT_SEC,
 };
 use crate::error::{Error, Result};
 use crate::pidfile;
@@ -85,7 +85,9 @@ impl NetOps for LiveNet {
     }
 
     fn bring_up(&self, iface: &str) -> Result<()> {
-        run_cmd(IP_BIN, &["link", "set", "dev", iface, "up"])
+        run_cmd(IP_BIN, &["link", "set", "dev", iface, "up"])?;
+        apply_phy_tweaks(iface);
+        Ok(())
     }
 
     fn flush_addr(&self, iface: &str) -> Result<()> {
@@ -305,6 +307,42 @@ fn run_cmd(bin: &str, args: &[&str]) -> Result<()> {
     }
 }
 
+/// Best-effort PHY/offload tweaks after link up. Missing ethtool or ENOTSUP must not fail apply.
+fn apply_phy_tweaks(iface: &str) {
+    let eee = ethtool_eee_args(iface);
+    let offload = ethtool_offload_args(iface);
+    for args in [eee.as_slice(), offload.as_slice()] {
+        if let Err(e) = run_ethtool(args) {
+            log::warn!("ethtool {args:?}: {e}");
+        }
+    }
+}
+
+fn ethtool_eee_args(iface: &str) -> [&str; 4] {
+    ["--set-eee", iface, "eee", "off"]
+}
+
+fn ethtool_offload_args(iface: &str) -> [&str; 6] {
+    ["-K", iface, "tso", "off", "gso", "off"]
+}
+
+fn run_ethtool(args: &[&str]) -> Result<()> {
+    let output = Command::new(ETHTOOL_BIN)
+        .args(args)
+        .output()
+        .map_err(|e| Error::Other(format!("{ETHTOOL_BIN}: {e}")))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let err = String::from_utf8_lossy(&output.stderr);
+        Err(Error::Other(format!(
+            "{ETHTOOL_BIN} {args:?} exited {}: {}",
+            output.status.code().unwrap_or(-1),
+            err.trim()
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -362,5 +400,17 @@ mod tests {
         write(&sys.join("lo/type"), "772\n");
         let err = resolve_iface(&sys, Some("lo")).unwrap_err();
         assert!(matches!(err, Error::NotEthernet(_)));
+    }
+
+    #[test]
+    fn phy_tweak_args_disable_eee_and_tso_gso() {
+        assert_eq!(
+            ethtool_eee_args("eth0"),
+            ["--set-eee", "eth0", "eee", "off"]
+        );
+        assert_eq!(
+            ethtool_offload_args("end0"),
+            ["-K", "end0", "tso", "off", "gso", "off"]
+        );
     }
 }

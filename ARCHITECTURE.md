@@ -38,8 +38,8 @@ installs the connected route. This task does **not** enable
 9. **arm64 musl** static binary. Clippy deny `unwrap_used` / `expect_used`
    / `panic` / `todo` (workspace lints).
 10. **Binary defaults** `192.168.0.1/24`. BigFred OS seeds
-    `$DATA_DIR/etc/micronet.json` to **`10.0.10.1` / `10.0.10.0/24`**
-    when the file is missing.
+    `$DATA_DIR/etc/micronet.json` from the image overlay (**`192.168.0.1` /
+    `192.168.0.0/24`**) when the file is missing.
 
 ---
 
@@ -101,7 +101,7 @@ ARCHITECTURE.md
 | Dir | Job |
 |---|---|
 | `config` | camelCase JSON, validate, load_or_create (example **without** `socket`), inotify debounce ~300 ms |
-| `net` | iface filter, `ip` / `ping` / pidfile-owned `dhclient`, DHCPDISCOVER encode/probe |
+| `net` | iface filter, `ip` / `ping` / pidfile-owned `dhclient`, DHCPDISCOVER encode/probe, best-effort `ethtool` EEE/TSO/GSO off after link up |
 | `dhcp` | render `dnsmasq.conf`, start / SIGHUP / restart / stop (pidfile only) |
 | `pidfile` | TERM/KILL one process; never `killall` |
 | `apply` | probe policy, mode apply, teardown, live health |
@@ -115,6 +115,8 @@ ARCHITECTURE.md
 ## 6. Mode selection
 
 1. Link up, no address; stop **our** leftover `dhclient` (per-iface pidfile).
+   After `ip link set up`, best-effort `ethtool --set-eee … eee off` and
+   `ethtool -K … tso off gso off` (log and continue on missing binary / ENOTSUP).
 2. If currently serving DHCP, stop **our** dnsmasq before a full probe (do not
    offer to ourselves).
 3. DHCPDISCOVER, wait `probeTimeoutSecs` for a DHCPOFFER that matches
@@ -217,4 +219,4 @@ iface, delete the default route (full service stop).
 - `configure-dhcp` service is removed.
 - bigfred-os fetch installs `/usr/sbin/micronet` (optional argv0 aliases).
 - Overlay `etc/micronet/micronet.json` seeds `$DATA_DIR/etc/micronet.json`
-  **only if missing** (operator edits survive), event subnet `10.0.10.0/24`.
+  **only if missing** (operator edits survive), default subnet `192.168.0.0/24`.

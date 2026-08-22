@@ -27,7 +27,7 @@ Po starcie daemon **`micronet`** (pierwszy fizyczny Ethernet):
 3. **Jest oferta** → tryb **`client`**: `dhclient`, bez dnsmasq, bez `gateway.ip` na Pi.
 4. **Brak oferty** → tymczasowo `.252` w skonfigurowanej podsieci, potem `ping gateway.ip`:
    - ping OK → tryb **`static`**: zostań na `.252`, default via `gateway.ip`, bez dnsmasq
-   - ping fail → tryb **`gateway`**: weź `gateway.ip` (seed obrazu: **`10.0.10.1/24`**), start **dnsmasq** (pula `.50–.200`, sticky **7d**, router/DNS = BigFred). **Bez default route.**
+   - ping fail → tryb **`gateway`**: weź `gateway.ip` (seed obrazu: **`192.168.0.1/24`**), start **dnsmasq** (pula `.50–.200`, sticky **7d**, router/DNS = BigFred). **Bez default route.**
 
 Jeśli router pojawi się **później** (po tym, jak BigFred już został gatewayem), micronet wykryje obcy DHCP (okresowa sonda) i **ustąpi**: wyłączy dnsmasq i uruchomi `dhclient`. Kolejność włączania zestawu B to nadal „najpierw router”, ale późniejsze podłączenie jest obsłużone.
 
@@ -69,16 +69,16 @@ Nie edytujesz dnsmasq ręcznie pod setup eventu. JSON: `$DATA_DIR/etc/micronet.j
 
 ### 3. Kolejność włączania
 
-Pusta hala: ping na `10.0.10.1` pada → BigFred od razu jest gatewayem. AP-y dostaną lease po starcie.
+Pusta hala: ping na `192.168.0.1` pada → BigFred od razu jest gatewayem. AP-y dostaną lease po starcie.
 
 - [ ] 1. Switch
-- [ ] 2. BigFred — poczekaj aż UI odpowie na `http://10.0.10.1` (~1–2 min)
+- [ ] 2. BigFred — poczekaj aż UI odpowie na `http://192.168.0.1` (~1–2 min)
 - [ ] 3. OC200 (jeśli jest) — poczekaj ~3 min
 - [ ] 4. AP1/2/3 przez PoE — poczekaj ~3 min
 
 ### 4. Laptop w sieci
 
-- [ ] Ethernet do portu 6 — laptop dostanie adres **z BigFreda**, np. `10.0.10.51`
+- [ ] Ethernet do portu 6 — laptop dostanie adres **z BigFreda**, np. `192.168.0.51`
 
 ---
 
@@ -176,7 +176,7 @@ To samo hasło dla obu.
 ## 8. Walidacja
 
 - [ ] Telefon widzi `bigfred2` i `bigfred5`
-- [ ] Na `bigfred5` otwórz `http://10.0.10.1` (BigFred) przy seedzie eventu / zestawie switch
+- [ ] Na `bigfred5` otwórz `http://192.168.0.1` (BigFred) przy seedzie eventu / zestawie switch
 - [ ] Pilot na `bigfred2`
 - [ ] Ping do huba &lt; 25 ms
 - [ ] RSSI na stanowiskach &gt; −65 dBm

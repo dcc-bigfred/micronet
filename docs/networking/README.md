@@ -27,7 +27,7 @@ On boot, the **`micronet` daemon** (`eth0` / first physical Ethernet):
 3. **Offer** → mode **`client`**: `dhclient`, no dnsmasq, no `gateway.ip` on the Pi.
 4. **No offer** → temporarily `.252` in the configured subnet, then `ping gateway.ip`:
    - ping OK → mode **`static`**: stay on `.252`, default route via `gateway.ip`, no dnsmasq
-   - ping fail → mode **`gateway`**: take `gateway.ip` (image seed: **`10.0.10.1/24`**), start **dnsmasq** (pool `.50–.200`, sticky lease **7d**, router/DNS = BigFred). **No default route.**
+   - ping fail → mode **`gateway`**: take `gateway.ip` (image seed: **`192.168.0.1/24`**), start **dnsmasq** (pool `.50–.200`, sticky lease **7d**, router/DNS = BigFred). **No default route.**
 
 If a router is plugged in or boots **after** BigFred already became gateway, micronet notices the foreign DHCP (periodic probe) and **yields**: stops dnsmasq and runs `dhclient`. Kit B power-on order is still “router first,” but a late plug-in is handled.
 
@@ -69,16 +69,16 @@ You do not edit dnsmasq by hand for the event setup. JSON: `$DATA_DIR/etc/micron
 
 ### 3. Power-on order
 
-Empty hall: ping to `10.0.10.1` fails → BigFred becomes gateway immediately. APs get a lease after they boot.
+Empty hall: ping to `192.168.0.1` fails → BigFred becomes gateway immediately. APs get a lease after they boot.
 
 - [ ] 1. Switch
-- [ ] 2. BigFred — wait until UI answers at `http://10.0.10.1` (~1–2 min)
+- [ ] 2. BigFred — wait until UI answers at `http://192.168.0.1` (~1–2 min)
 - [ ] 3. OC200 (if used) — wait ~3 min
 - [ ] 4. AP1/2/3 via PoE — wait ~3 min
 
 ### 4. Join with a laptop
 
-- [ ] Ethernet to switch port 6 — laptop gets an address **from BigFred**, e.g. `10.0.10.51`
+- [ ] Ethernet to switch port 6 — laptop gets an address **from BigFred**, e.g. `192.168.0.51`
 
 ---
 
@@ -176,7 +176,7 @@ Same password for both.
 ## 8. Validation
 
 - [ ] Phone sees `bigfred2` and `bigfred5`
-- [ ] On `bigfred5`, open `http://10.0.10.1` (BigFred UI) when using the event seed / switch kit
+- [ ] On `bigfred5`, open `http://192.168.0.1` (BigFred UI) when using the event seed / switch kit
 - [ ] Throttle on `bigfred2`
 - [ ] Ping to the hub &lt; 25 ms
 - [ ] RSSI at operator seats &gt; −65 dBm

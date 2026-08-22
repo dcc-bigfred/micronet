@@ -205,7 +205,7 @@ Dlaczego 3 AP w tym scenariuszu:
 
 ## 9. Adresacja i discovery
 
-- Jedna podsieć L2, np. `10.0.10.0/24` (lub dowolna prywatna). BigFred na stałym IP (np. `10.0.10.1`), podłączony pod port 1 switcha (Priority Mode).
+- Jedna podsieć L2, np. `192.168.0.0/24` (lub dowolna prywatna). BigFred na stałym IP (np. `192.168.0.1`), podłączony pod port 1 switcha (Priority Mode).
 - DHCP na BigFredzie lub na routerze/serwerze pełniącym rolę bramy w tej podsieci; pula ≥ 60 adresów.
 - Discovery: BigFred rozgłasza `_withrottle._tcp` / `_z21._udp` przez mDNS. Utrzymać mDNS działający przez AP (nie blokować multicastu link-local 224.0.0.251).
 - WiFredy (własny firmware) mogą używać stałego adresu/hosta BigFreda — najbezpieczniejsze, uniezależnia od mDNS i pozwala włączyć izolację klientów.

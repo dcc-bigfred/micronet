@@ -71,12 +71,12 @@ Montaż AP: **2 m**, dysk poziomo na maszcie/statywie, wokół strefy operatoró
 
 | Urządzenie | IP | Uwagi |
 |------------|-----|-------|
-| BigFred | `10.0.10.1/24` | statyczny |
-| AP1 | `10.0.10.11/24` | statyczny (zalecane) |
-| AP2 | `10.0.10.12/24` | statyczny (zalecane) |
-| AP3 | `10.0.10.13/24` | statyczny (zalecane) |
-| Brama | `10.0.10.1` | BigFred |
-| DHCP pool (na BigFredzie) | `10.0.10.50` – `10.0.10.200` | klienci WiFi |
+| BigFred | `192.168.0.1/24` | statyczny |
+| AP1 | `192.168.0.11/24` | statyczny (zalecane) |
+| AP2 | `192.168.0.12/24` | statyczny (zalecane) |
+| AP3 | `192.168.0.13/24` | statyczny (zalecane) |
+| Brama | `192.168.0.1` | BigFred |
+| DHCP pool (na BigFredzie) | `192.168.0.50` – `192.168.0.200` | klienci WiFi |
 | Maska | `255.255.255.0` | — |
 
 > DHCP serwuje BigFred. AP nie muszą robić NAT ani routingu — tylko most L2 + WiFi.
@@ -101,9 +101,9 @@ Wykonaj **osobno dla każdego AP** (AP1 → AP2 → AP3).
 
 ### 4.2 Dostęp po podłączeniu do sieci BigFred
 
-Gdy AP ma IP z DHCP BigFreda (lub statyczne `10.0.10.11–13`):
+Gdy AP ma IP z DHCP BigFreda (lub statyczne `192.168.0.11–13`):
 
-- Wejdź na `http://10.0.10.11` (lub `.12` / `.13`) z laptopa w tej samej podsieci.
+- Wejdź na `http://192.168.0.11` (lub `.12` / `.13`) z laptopa w tej samej podsieci.
 
 ### 4.3 (Opcjonalnie) Statyczne IP AP
 
@@ -114,8 +114,8 @@ Gdy AP ma IP z DHCP BigFreda (lub statyczne `10.0.10.11–13`):
 | IP Assignment | Static |
 | IP Address | patrz tabela w §3 |
 | Subnet Mask | `255.255.255.0` |
-| Default Gateway | `10.0.10.1` |
-| Primary DNS | `10.0.10.1` (lub puste) |
+| Default Gateway | `192.168.0.1` |
+| Primary DNS | `192.168.0.1` (lub puste) |
 
 Zapisz. AP może na chwilę się rozłączyć — wejdź pod nowym IP.
 
@@ -127,9 +127,9 @@ W **System → Device Info** ustaw:
 
 | Fizyczny AP | Device Name | IP |
 |-------------|-------------|-----|
-| AP przy stanowisku A | `BigFred-AP1` | `10.0.10.11` |
-| AP przy stanowisku B | `BigFred-AP2` | `10.0.10.12` |
-| AP przy stanowisku C | `BigFred-AP3` | `10.0.10.13` |
+| AP przy stanowisku A | `BigFred-AP1` | `192.168.0.11` |
+| AP przy stanowisku B | `BigFred-AP2` | `192.168.0.12` |
+| AP przy stanowisku C | `BigFred-AP3` | `192.168.0.13` |
 
 ---
 
@@ -216,7 +216,7 @@ Hasła poniżej to **propozycje** — ustaw własne i zapisz w jednym miejscu dl
 | SSID Isolation | **OFF** na start* |
 | Status | **Enabled** |
 
-\* Po teście mDNS (§9) możesz włączyć **SSID Isolation ON** — tylko jeśli WiFredy i telefony łączą się ze **stałym IP/hostem BigFreda** (`10.0.10.1`), a nie polegają na discovery.
+\* Po teście mDNS (§9) możesz włączyć **SSID Isolation ON** — tylko jeśli WiFredy i telefony łączą się ze **stałym IP/hostem BigFreda** (`192.168.0.1`), a nie polegają na discovery.
 
 **Na 5 GHz:** ten SSID **nie tworzymy**.
 
@@ -273,9 +273,9 @@ Zrób to **3 razy** (raz per AP). Najpierw AP1, potem AP2, potem AP3.
 
 | AP | 2.4 GHz (20 MHz) | 5 GHz (40 MHz) |
 |----|------------------|----------------|
-| **AP1** (`10.0.10.11`) | ch **1** | ch **36** |
-| **AP2** (`10.0.10.12`) | ch **6** | ch **149** |
-| **AP3** (`10.0.10.13`) | ch **11** | ch **44** lub **157** |
+| **AP1** (`192.168.0.11`) | ch **1** | ch **36** |
+| **AP2** (`192.168.0.12`) | ch **6** | ch **149** |
+| **AP3** (`192.168.0.13`) | ch **11** | ch **44** lub **157** |
 
 ---
 
@@ -299,9 +299,9 @@ Przy każdym stanowisku operatora:
 
 ### 9.3 Discovery i latency
 
-- [ ] Telefon na `BigFred` (5 GHz) otwiera stronę BigFreda (`http://10.0.10.1` lub hostname).
+- [ ] Telefon na `BigFred` (5 GHz) otwiera stronę BigFreda (`http://192.168.0.1` lub hostname).
 - [ ] WiFred łączy się z BigFredem (mDNS lub stały IP).
-- [ ] Ping / RTT z klienta do `10.0.10.1` **< 25 ms** (średnio).
+- [ ] Ping / RTT z klienta do `192.168.0.1` **< 25 ms** (średnio).
 - [ ] Test throttle: zmiana prędkości/lokomotywy bez zauważalnej zwłoki.
 
 ### 9.4 mDNS i izolacja
@@ -336,7 +336,7 @@ Przy każdym stanowisku operatora:
 
 - [ ] UPS na BigFred + switch (jeśli masz).
 - [ ] 3 AP na 2 m, zasilone, linki PoE świecą.
-- [ ] BigFred na `10.0.10.1`, DHCP działa.
+- [ ] BigFred na `192.168.0.1`, DHCP działa.
 - [ ] Skan kanałów — ewentualna korekta 1/6/11.
 - [ ] 3–5 WiFredów testowych na różnych stanowiskach — throttle OK.
 - [ ] Prośba do publiczności: **wyłączyć hotspoty osobiste**.
@@ -359,7 +359,7 @@ Przy każdym stanowisku operatora:
 |-------|-------------------------|-----------|
 | Wysoki ping (>50 ms) | zatłoczone 2.4 GHz, hotspoty | skan kanałów; telefony tylko na `BigFred` 5G; prośba o wyłączenie hotspotów |
 | WiFred się rozłącza | słaby RSSI, roaming | przesuń AP; sprawdź RSSI > −65 dBm; zostań przy jednym AP |
-| Telefon nie widzi BigFreda | zły SSID / 5 GHz only | użyj `BigFred` (5 GHz); wejdź na `http://10.0.10.1` ręcznie |
+| Telefon nie widzi BigFreda | zły SSID / 5 GHz only | użyj `BigFred` (5 GHz); wejdź na `http://192.168.0.1` ręcznie |
 | mDNS nie działa | SSID Isolation ON | wyłącz izolację lub ustaw stały IP BigFreda w WiFredzie |
 | Wolne ładowanie ikon | normalne przy <200 kB | akceptowalne; nie wpływa na DCC jeśli ping OK |
 | AP nie wstaje | PoE | sprawdź port switcha; budżet 67 W wystarcza na 3× ~11 W |

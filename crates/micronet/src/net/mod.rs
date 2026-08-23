@@ -311,7 +311,8 @@ fn run_cmd(bin: &str, args: &[&str]) -> Result<()> {
 fn apply_phy_tweaks(iface: &str) {
     let eee = ethtool_eee_args(iface);
     let offload = ethtool_offload_args(iface);
-    for args in [eee.as_slice(), offload.as_slice()] {
+    let coalesce = ethtool_coalesce_args(iface);
+    for args in [eee.as_slice(), offload.as_slice(), coalesce.as_slice()] {
         if let Err(e) = run_ethtool(args) {
             log::warn!("ethtool {args:?}: {e}");
         }
@@ -324,6 +325,10 @@ fn ethtool_eee_args(iface: &str) -> [&str; 4] {
 
 fn ethtool_offload_args(iface: &str) -> [&str; 6] {
     ["-K", iface, "tso", "off", "gso", "off"]
+}
+
+fn ethtool_coalesce_args(iface: &str) -> [&str; 6] {
+    ["-C", iface, "rx-usecs", "0", "tx-usecs", "0"]
 }
 
 fn run_ethtool(args: &[&str]) -> Result<()> {
@@ -411,6 +416,10 @@ mod tests {
         assert_eq!(
             ethtool_offload_args("end0"),
             ["-K", "end0", "tso", "off", "gso", "off"]
+        );
+        assert_eq!(
+            ethtool_coalesce_args("eth0"),
+            ["-C", "eth0", "rx-usecs", "0", "tx-usecs", "0"]
         );
     }
 }

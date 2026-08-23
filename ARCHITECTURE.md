@@ -101,7 +101,7 @@ ARCHITECTURE.md
 | Dir | Job |
 |---|---|
 | `config` | camelCase JSON, validate, load_or_create (example **without** `socket`), inotify debounce ~300 ms |
-| `net` | iface filter, `ip` / `ping` / pidfile-owned `dhclient`, DHCPDISCOVER encode/probe, best-effort `ethtool` EEE/TSO/GSO off after link up |
+| `net` | iface filter, `ip` / `ping` / pidfile-owned `dhclient`, DHCPDISCOVER encode/probe, best-effort `ethtool` EEE/TSO/GSO/coalesce off after link up |
 | `dhcp` | render `dnsmasq.conf`, start / SIGHUP / restart / stop (pidfile only) |
 | `pidfile` | TERM/KILL one process; never `killall` |
 | `apply` | probe policy, mode apply, teardown, live health |
@@ -115,8 +115,9 @@ ARCHITECTURE.md
 ## 6. Mode selection
 
 1. Link up, no address; stop **our** leftover `dhclient` (per-iface pidfile).
-   After `ip link set up`, best-effort `ethtool --set-eee … eee off` and
-   `ethtool -K … tso off gso off` (log and continue on missing binary / ENOTSUP).
+   After `ip link set up`, best-effort `ethtool --set-eee … eee off`,
+   `ethtool -K … tso off gso off`, and `ethtool -C … rx-usecs 0 tx-usecs 0`
+   (log and continue on missing binary / ENOTSUP).
 2. If currently serving DHCP, stop **our** dnsmasq before a full probe (do not
    offer to ourselves).
 3. DHCPDISCOVER, wait `probeTimeoutSecs` for a DHCPOFFER that matches

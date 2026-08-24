@@ -27,7 +27,7 @@ On boot, the **`micronet` daemon** (`eth0` / first physical Ethernet):
 3. **Offer** → mode **`client`**: `dhclient`, no dnsmasq, no `gateway.ip` on the Pi.
 4. **No offer** → temporarily `.252` in the configured subnet, then `ping gateway.ip`:
    - ping OK → mode **`static`**: stay on `.252`, default route via `gateway.ip`, no dnsmasq
-   - ping fail → mode **`gateway`**: take `gateway.ip` (image seed: **`192.168.0.1/24`**), start **dnsmasq** (pool `.50–.200`, sticky lease **7d**, router/DNS = BigFred). **No default route.**
+   - ping fail → mode **`gateway`**: take `gateway.ip` (image seed: **`192.168.0.1/24`**), start **dnsmasq** (pool `.50–.200`, sticky lease **7d**, router/DNS = BigFred). **No default route.** Optional `dns.records` in `$DATA_DIR/etc/micronet.json` become unicast names (e.g. `bigfred.lan`) pointing at `gateway.ip`. In `client` / `static` those names are not served — use mDNS `bigfred.local`.
 
 If a router is plugged in or boots **after** BigFred already became gateway, micronet notices the foreign DHCP (periodic probe) and **yields**: stops dnsmasq and runs `dhclient`. Kit B power-on order is still “router first,” but a late plug-in is handled.
 
@@ -40,7 +40,7 @@ Typical mapping:
 | TL-SF1006P (dumb PoE switch) | none | `gateway` | BigFred dnsmasq |
 | hEX PoE lite RB750UPr2 | yes (router) | `client` or `static` | MikroTik |
 
-You do not edit dnsmasq by hand for the event setup. JSON: `$DATA_DIR/etc/micronet.json` (hot-reload).
+You do not edit dnsmasq by hand for the event setup. JSON: `$DATA_DIR/etc/micronet.json` (hot-reload). Optional `"dns": { "enabled": true, "records": [ { "name": "bigfred.lan" } ] }` is how traditional names are added; omit `ip` to use `gateway.ip`.
 
 ---
 

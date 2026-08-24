@@ -27,7 +27,7 @@ Po starcie daemon **`micronet`** (pierwszy fizyczny Ethernet):
 3. **Jest oferta** → tryb **`client`**: `dhclient`, bez dnsmasq, bez `gateway.ip` na Pi.
 4. **Brak oferty** → tymczasowo `.252` w skonfigurowanej podsieci, potem `ping gateway.ip`:
    - ping OK → tryb **`static`**: zostań na `.252`, default via `gateway.ip`, bez dnsmasq
-   - ping fail → tryb **`gateway`**: weź `gateway.ip` (seed obrazu: **`192.168.0.1/24`**), start **dnsmasq** (pula `.50–.200`, sticky **7d**, router/DNS = BigFred). **Bez default route.**
+   - ping fail → tryb **`gateway`**: weź `gateway.ip` (seed obrazu: **`192.168.0.1/24`**), start **dnsmasq** (pula `.50–.200`, sticky **7d**, router/DNS = BigFred). **Bez default route.** Opcjonalne `dns.records` w `$DATA_DIR/etc/micronet.json` to nazwy unicast (np. `bigfred.lan`) na `gateway.ip`. W `client` / `static` tych nazw nie ma — zostaje mDNS `bigfred.local`.
 
 Jeśli router pojawi się **później** (po tym, jak BigFred już został gatewayem), micronet wykryje obcy DHCP (okresowa sonda) i **ustąpi**: wyłączy dnsmasq i uruchomi `dhclient`. Kolejność włączania zestawu B to nadal „najpierw router”, ale późniejsze podłączenie jest obsłużone.
 
@@ -40,7 +40,7 @@ Typowe mapowanie:
 | TL-SF1006P (głupi switch PoE) | brak | `gateway` | dnsmasq na BigFredzie |
 | hEX PoE lite RB750UPr2 | tak (router) | `client` albo `static` | MikroTik |
 
-Nie edytujesz dnsmasq ręcznie pod setup eventu. JSON: `$DATA_DIR/etc/micronet.json` (hot-reload).
+Nie edytujesz dnsmasq ręcznie pod setup eventu. JSON: `$DATA_DIR/etc/micronet.json` (hot-reload). Opcjonalne `"dns": { "enabled": true, "records": [ { "name": "bigfred.lan" } ] }` dodaje tradycyjne nazwy; bez `ip` używane jest `gateway.ip`.
 
 ---
 

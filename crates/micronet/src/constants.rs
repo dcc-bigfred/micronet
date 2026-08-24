@@ -35,6 +35,10 @@ pub const DEFAULT_RANGE_START: u8 = 50;
 pub const DEFAULT_RANGE_END: u8 = 200;
 pub const DEFAULT_STATIC_HOST: u8 = 252;
 pub const REQUIRED_PREFIX: u8 = 24;
+/// Cap on `dns.records` in `micronet.json`.
+pub const MAX_DNS_RECORDS: usize = 64;
+/// RFC 1035 FQDN length (without a trailing root dot).
+pub const MAX_DNS_NAME_LEN: usize = 253;
 
 /// Linux `ARPHRD_ETHER`.
 pub const ARPHRD_ETHER: u16 = 1;

@@ -10,12 +10,11 @@ For a non-technical operator. Goal: low-latency WiFi for throttles (`bigfred2`, 
 
 ## What you need
 
-- Raspberry Pi 3 + Ethernet = **BigFred** (server)
-- Omada **EAP610/613 × 3** (access points)
-- **One** of two L2 backhauls (operator choice; the daemon does not detect the vendor):
-  - **Switch PoE TL-SF1006P** (ports 1–4 PoE+, 5–6 plain) — BigFred **serves DHCP**
-  - **MikroTik hEX PoE lite RB750UPr2** (5× FE, **4 PoE** ports) — router **serves DHCP**; BigFred does **not**
-- **Omada OC200** is optional (central controller). Without it, configure each AP in **standalone** mode (same SSIDs/settings on every AP; only channels differ).
+- Raspberry Pi **5** + Ethernet = **BigFred** (server)
+- Omada **EAP610/613 × 3** (access points), **wired** to the switch (this is not Omada Mesh)
+- **Switch PoE TL-SF1006P** (ports 1–4 PoE+, 5–6 plain) — **required**. APs take PoE from this switch only
+- **Omada OC200** — **required** for Fast Roaming (802.11k/v). The controller must stay powered; if it stops, Fast Roaming stops. Same SSID on all APs still allows *basic* client-driven roaming without a controller, but not steered handovers
+- Optional: **any DHCP router** on a spare switch port (not as PoE for the Omadas). Then BigFred yields and does **not** serve DHCP
 - Ethernet cables, PSUs, 3 stands at **2 m**, laptop/phone for setup, optional UPS
 
 ## How BigFred networking works
@@ -29,7 +28,7 @@ On boot, the **`micronet` daemon** (`eth0` / first physical Ethernet):
    - ping OK → mode **`static`**: stay on `.252`, default route via `gateway.ip`, no dnsmasq
    - ping fail → mode **`gateway`**: take `gateway.ip` (image seed: **`192.168.0.1/24`**), start **dnsmasq** (pool `.50–.200`, sticky lease **7d**, router/DNS = BigFred). **No default route.** Optional `dns.records` in `$DATA_DIR/etc/micronet.json` become unicast names (e.g. `bigfred.lan`) pointing at `gateway.ip`. In `client` / `static` those names are not served — use mDNS `bigfred.local`.
 
-If a router is plugged in or boots **after** BigFred already became gateway, micronet notices the foreign DHCP (periodic probe) and **yields**: stops dnsmasq and runs `dhclient`. Kit B power-on order is still “router first,” but a late plug-in is handled.
+If a router is plugged into the switch or boots **after** BigFred already became gateway, micronet notices the foreign DHCP (periodic probe) and **yields**: stops dnsmasq and runs `dhclient`. Power the router first when you want it to own DHCP.
 
 There is no Omada detection and no per-MAC `dhcp-host=` reservations. Stickiness is the dnsmasq leasefile + `7d`.
 
@@ -37,10 +36,10 @@ Typical mapping:
 
 | Backhaul | Foreign DHCP / live `gateway.ip` | BigFred mode | Who leases the laptop |
 |---|---|---|---|
-| TL-SF1006P (dumb PoE switch) | none | `gateway` | BigFred dnsmasq |
-| hEX PoE lite RB750UPr2 | yes (router) | `client` or `static` | MikroTik |
+| TL-SF1006P only | none | `gateway` | BigFred dnsmasq |
+| TL-SF1006P + router on a spare port | yes (router) | `client` or `static` | the router |
 
-You do not edit dnsmasq by hand for the event setup. JSON: `$DATA_DIR/etc/micronet.json` (hot-reload). Optional `"dns": { "enabled": true, "records": [ { "name": "bigfred.lan" } ] }` is how traditional names are added; omit `ip` to use `gateway.ip`.
+You do not edit dnsmasq by hand for the event setup. JSON: `$DATA_DIR/etc/micronet.json` (hot-reload). Optional `"dns": { "enabled": true, "records": [ { "name": "bigfred.lan" } ] }` is how traditional names are added; omit `addr` to use `gateway.ip`, or set `addr` to an IPv4 or a hostname (CNAME).
 
 ---
 
@@ -54,12 +53,12 @@ You do not edit dnsmasq by hand for the event setup. JSON: `$DATA_DIR/etc/micron
 | 2 | AP1 | PoE |
 | 3 | AP2 | PoE |
 | 4 | AP3 | PoE |
-| 5 | OC200 (optional) | Plain port; OC200 has its own PSU |
-| 6 | free | Laptop for setup |
+| 5 | OC200 | Plain port; OC200 has its own PSU (**required** for Fast Roaming) |
+| 6 | free | Laptop, or optional DHCP router |
 
 - [ ] BigFred → port 1
 - [ ] AP1 → 2, AP2 → 3, AP3 → 4
-- [ ] OC200 → 5 (if used)
+- [ ] OC200 → 5
 - [ ] Plug in switch, BigFred, and OC200 PSUs
 
 ### 2. Switch rear switches
@@ -73,7 +72,7 @@ Empty hall: ping to `192.168.0.1` fails → BigFred becomes gateway immediately.
 
 - [ ] 1. Switch
 - [ ] 2. BigFred — wait until UI answers at `http://192.168.0.1` (~1–2 min)
-- [ ] 3. OC200 (if used) — wait ~3 min
+- [ ] 3. OC200 — wait ~3 min
 - [ ] 4. AP1/2/3 via PoE — wait ~3 min
 
 ### 4. Join with a laptop
@@ -82,34 +81,29 @@ Empty hall: ping to `192.168.0.1` fails → BigFred becomes gateway immediately.
 
 ---
 
-## Kit B — MikroTik hEX PoE lite RB750UPr2 (router = DHCP)
+## Optional — DHCP router on the switch
 
-BigFred **must not** serve DHCP (router already does). ether1 has **no PoE**.
-
-| Port | Device | Notes |
-|---|---|---|
-| ether1 | BigFred | no PoE |
-| ether2 | AP1 | PoE |
-| ether3 | AP2 | PoE |
-| ether4 | AP3 | PoE |
-| ether5 | spare AP / laptop | PoE |
+Do **not** power Omada APs from a MikroTik (or other) PoE router: those PoE pins are not compatible with EAP610/613. Keep APs on the **TL-SF1006P**. Plug the router into a spare switch port (e.g. 6) if you want *it* to serve DHCP.
 
 ### Power-on order
 
-- [ ] 1. MikroTik (wait until its DHCP is up)
-- [ ] 2. BigFred — joins as **`client`** (or **`static` `.252`** if the router has no DHCP but answers ping on `gateway.ip`)
-- [ ] 3. APs via PoE on ether2–5
+- [ ] 1. Switch
+- [ ] 2. Router (wait until its DHCP is up)
+- [ ] 3. BigFred — joins as **`client`** (or **`static` `.252`** if the router has no DHCP but answers ping on `gateway.ip`)
+- [ ] 4. OC200, then APs via switch PoE
 
 ### Laptop
 
-- [ ] Plug into a spare router port — lease comes **from the MikroTik**, not from BigFred.
+- [ ] Plug into the switch — lease comes **from the router**, not from BigFred.
 - [ ] Confirm `micronet status` is `client` or `static`, **not** `gateway`.
 
 ---
 
-## 5. Configure WiFi — choose one path
+## 5. Configure WiFi — use the OC200
 
-### Path A — with OC200 (controller)
+### Path A — OC200 (required for Fast Roaming)
+
+[TP-Link Fast Roaming](https://support.omadanetworks.com/en/document/12972/) (802.11k/v) is enabled from the controller and **needs the controller running**. Omada Mesh is a separate wireless-backhaul feature; this kit uses **wired** APs, so Mesh stays OFF.
 
 - [ ] Find OC200 IP (TP-Link **Omada Discovery**)
 - [ ] Open `https://<oc200-ip>`, accept the cert warning
@@ -117,10 +111,11 @@ BigFred **must not** serve DHCP (router already does). ether1 has **no PoE**.
 - [ ] Wizard: region/timezone; skip creating SSIDs here
 - [ ] **Devices** → Adopt all three APs → wait until **Connected**
 - [ ] Create WLAN group + SSIDs (step 6) and radio tweaks (step 7) **once** in the controller
+- [ ] Enable **Fast Roaming** (802.11k/v) in the controller; leave Mesh OFF
 
-### Path B — standalone (no OC200)
+### Path B — standalone (no steered roaming)
 
-Do steps 6–7 **on each AP** (AP1, then AP2, then AP3). Default first access: join the sticker SSID or open `https://tplinkeap.net` / `https://192.168.0.254`, then set a management password and preferably a static/management IP once on the event subnet. Channels differ per AP (step 7.1); SSIDs and passwords are identical.
+Only if the OC200 is missing. Do steps 6–7 **on each AP**. Same SSID/password still lets phones roam on their own (slow scan). There is **no** 802.11k/v Fast Roaming without a running Omada Controller. Default first access: sticker SSID or `https://tplinkeap.net` / `https://192.168.0.254`.
 
 ## 6. SSIDs: `bigfred2` and `bigfred5`
 
@@ -171,7 +166,7 @@ Same password for both.
 - [ ] WMM Enable on both SSIDs
 - [ ] Multicast filter OFF (mDNS `224.0.0.251` must pass); IGMP snooping + multicast-to-unicast ON if available
 - [ ] Client Isolation OFF
-- [ ] Load balance 2.4 GHz: max ~18 clients; 802.11k/v/r ON
+- [ ] Load balance 2.4 GHz: max ~18 clients; Fast Roaming **802.11k/v** ON in the controller (Omada EAP Fast Roaming is k/v, not 802.11r)
 
 ## 8. Validation
 
@@ -184,8 +179,9 @@ Same password for both.
 ## 9. Event-day checklist
 
 - [ ] Three APs at 2 m around operators (not behind the layout)
-- [ ] Switch kit: BigFred on port 1 (Priority), `micronet status` → `gateway`, laptop leased by BigFred
-- [ ] MikroTik kit: ether1 = BigFred, ether2–5 = APs; `micronet status` → `client`/`static`; laptop leased by the router
+- [ ] Switch: BigFred on port 1 (Priority), OC200 on port 5, APs on PoE 2–4
+- [ ] No extra router: `micronet status` → `gateway`, laptop leased by BigFred
+- [ ] Optional router on a spare switch port: `micronet status` → `client`/`static`; laptop leased by the router
 - [ ] Spectrum check — adjust 1/6/11 if needed
 - [ ] 3–5 test throttles OK
 - [ ] Ask audience to disable personal hotspots

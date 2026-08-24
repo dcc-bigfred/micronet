@@ -31,6 +31,10 @@ installs the connected route. This task does **not** enable
 6. **dnsmasq** is DHCP+DNS for the event pool only (`listen-address` =
    `gateway.ip`). Lease stickiness is `dhcp-range=…,<sticky>` (default
    `7d`) plus `$DATA_DIR/etc/dnsmasq.leases`. No Omada `dhcp-host=`.
+   Optional JSON `dns` (`enabled` + `records[]`) adds `host-record=` and
+   `local=/lan/` in gateway mode. `addr` is IPv4; omitted `addr` uses
+   `gateway.ip`. Unicast names disappear in `client` / `static`
+   (dnsmasq is stopped).
 7. **IPC** is 4-byte little-endian length + JSON (`status` / `info` /
    `reconfigure`). Max frame `MAX_IPC_FRAME_BYTES`; max concurrent
    clients `MAX_IPC_CLIENTS`.
@@ -156,9 +160,10 @@ Process ownership: `$DATA_DIR/run/dnsmasq.pid` and
 
 Two operator kits (daemon only sees DHCP + ping):
 
-- **TL-SF1006P** — empty LAN → `gateway`, BigFred DHCP.
-- **MikroTik hEX PoE lite RB750UPr2** — ether1 BigFred (no PoE),
-  ether2–5 PoE to APs; router DHCP → `client` / `static`.
+- **TL-SF1006P only** — empty LAN → `gateway`, BigFred DHCP.
+- **TL-SF1006P + any router on the switch** — foreign DHCP → `client` /
+  `static`. APs stay on the switch PoE ports (Omada PoE is not compatible
+  with MikroTik hEX PoE).
 
 ---
 

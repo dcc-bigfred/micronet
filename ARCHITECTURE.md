@@ -31,10 +31,10 @@ installs the connected route. This task does **not** enable
 6. **dnsmasq** is DHCP+DNS for the event pool only (`listen-address` =
    `gateway.ip`). Lease stickiness is `dhcp-range=…,<sticky>` (default
    `7d`) plus `$DATA_DIR/etc/dnsmasq.leases`. No Omada `dhcp-host=`.
-   Optional JSON `dns` (`enabled` + `records[]`) adds `host-record=` /
-   `cname=` and `local=/lan/` in gateway mode. `addr` is IPv4 or a
-   hostname (CNAME); omitted `addr` uses `gateway.ip`. Unicast names
-   disappear in `client` / `static` (dnsmasq is stopped).
+   Optional JSON `dns` (`enabled` + `records[]`) adds `host-record=` and
+   `local=/lan/` in gateway mode. `addr` is IPv4; omitted `addr` uses
+   `gateway.ip`. Unicast names disappear in `client` / `static`
+   (dnsmasq is stopped).
 7. **IPC** is 4-byte little-endian length + JSON (`status` / `info` /
    `reconfigure`). Max frame `MAX_IPC_FRAME_BYTES`; max concurrent
    clients `MAX_IPC_CLIENTS`.

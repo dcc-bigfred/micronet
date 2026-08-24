@@ -34,18 +34,9 @@ dhcp-authoritative
         body.push_str("local=/lan/\n");
         for rec in &cfg.dns.records {
             // Names are validated in Config::validate before apply.
-            if let (Ok(name), Ok(target)) = (
-                crate::config::normalize_dns_name(&rec.name),
-                cfg.dns_record_target(rec),
-            ) {
-                match target {
-                    crate::config::DnsTarget::A(ip) => {
-                        body.push_str(&format!("host-record={name},{ip}\n"));
-                    }
-                    crate::config::DnsTarget::Cname(canon) => {
-                        body.push_str(&format!("cname={name},{canon}\n"));
-                    }
-                }
+            if let Ok(name) = crate::config::normalize_dns_name(&rec.name) {
+                let ip = cfg.dns_record_ip(rec);
+                body.push_str(&format!("host-record={name},{ip}\n"));
             }
         }
     }
@@ -140,11 +131,7 @@ mod tests {
             },
             crate::config::DnsRecord {
                 name: "wizard".into(),
-                addr: Some("192.168.0.1".into()),
-            },
-            crate::config::DnsRecord {
-                name: "alias.lan".into(),
-                addr: Some("bigfred.lan".into()),
+                addr: Some(Ipv4Addr::new(192, 168, 0, 1)),
             },
         ];
         let body = render_conf(
@@ -156,7 +143,7 @@ mod tests {
         assert!(body.contains("local=/lan/"));
         assert!(body.contains("host-record=bigfred.lan,192.168.0.1"));
         assert!(body.contains("host-record=wizard,192.168.0.1"));
-        assert!(body.contains("cname=alias.lan,bigfred.lan"));
+        assert!(!body.contains("cname="));
         assert!(!body.contains("port=0"));
     }
 }

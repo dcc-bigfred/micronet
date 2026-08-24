@@ -145,21 +145,13 @@ impl DnsConfig {
     }
 }
 
-/// One unicast name. Omitted `addr` uses `gateway.ip` as an A record.
-/// `addr` is either an IPv4 (`host-record=`) or a hostname (`cname=`).
+/// One unicast A record. Omitted `addr` uses `gateway.ip`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DnsRecord {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub addr: Option<String>,
-}
-
-/// Resolved target of one [`DnsRecord`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DnsTarget {
-    A(Ipv4Addr),
-    Cname(String),
+    pub addr: Option<Ipv4Addr>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -257,22 +249,15 @@ impl Config {
             if seen.iter().any(|n| n == &name) {
                 return Err(Error::Config(format!("dns.records duplicate name {name}")));
             }
-            match parse_dns_addr(rec.addr.as_deref(), self.gateway.ip)? {
-                DnsTarget::Cname(target) if target == name => {
-                    return Err(Error::Config(format!(
-                        "dns.records {name} CNAME must not point at itself"
-                    )));
-                }
-                DnsTarget::A(_) | DnsTarget::Cname(_) => {}
-            }
             seen.push(name);
         }
         Ok(())
     }
 
-    /// A or CNAME target for a record (`addr`, or A=`gateway.ip` when omitted).
-    pub fn dns_record_target(&self, rec: &DnsRecord) -> Result<DnsTarget> {
-        parse_dns_addr(rec.addr.as_deref(), self.gateway.ip)
+    /// A-record IPv4 (`addr`, or `gateway.ip` when omitted).
+    #[must_use]
+    pub fn dns_record_ip(&self, rec: &DnsRecord) -> Ipv4Addr {
+        rec.addr.unwrap_or(self.gateway.ip)
     }
 
     /// Host address `.N` in `gateway.subnet` (/24).
@@ -351,17 +336,6 @@ pub fn normalize_dns_name(name: &str) -> Result<String> {
         out.push_str(&label.to_ascii_lowercase());
     }
     Ok(out)
-}
-
-/// `addr` omitted / empty → A(`gateway.ip`); IPv4 → A; otherwise hostname → CNAME.
-pub fn parse_dns_addr(addr: Option<&str>, default_ip: Ipv4Addr) -> Result<DnsTarget> {
-    let Some(raw) = addr.map(str::trim).filter(|s| !s.is_empty()) else {
-        return Ok(DnsTarget::A(default_ip));
-    };
-    if let Ok(ip) = raw.parse::<Ipv4Addr>() {
-        return Ok(DnsTarget::A(ip));
-    }
-    Ok(DnsTarget::Cname(normalize_dns_name(raw)?))
 }
 
 /// Parse a dnsmasq duration (`7d`, `72h`, `45s`, bare seconds). Must be > 0.
@@ -510,11 +484,8 @@ mod tests {
         cfg.validate().unwrap();
         assert!(cfg.dns.enabled);
         assert_eq!(cfg.dns.records[0].name, "BigFred.lan");
-        assert_eq!(
-            cfg.dns_record_target(&cfg.dns.records[0]).unwrap(),
-            DnsTarget::A(cfg.gateway.ip)
-        );
-        assert_eq!(cfg.dns.records[1].addr.as_deref(), Some("10.0.10.1"));
+        assert_eq!(cfg.dns_record_ip(&cfg.dns.records[0]), cfg.gateway.ip);
+        assert_eq!(cfg.dns.records[1].addr, Some(Ipv4Addr::new(10, 0, 10, 1)));
         assert_eq!(normalize_dns_name("BigFred.lan").unwrap(), "bigfred.lan");
     }
 
@@ -567,43 +538,13 @@ mod tests {
     }
 
     #[test]
-    fn dns_cname_addr_accepted() {
-        let mut c = Config::default();
-        c.dns.enabled = true;
-        c.dns.records = vec![
-            DnsRecord {
-                name: "bigfred.lan".into(),
-                addr: None,
-            },
-            DnsRecord {
-                name: "wizard.lan".into(),
-                addr: Some("bigfred.lan".into()),
-            },
-        ];
-        c.validate().unwrap();
-        assert_eq!(
-            c.dns_record_target(&c.dns.records[1]).unwrap(),
-            DnsTarget::Cname("bigfred.lan".into())
-        );
-    }
-
-    #[test]
-    fn dns_self_cname_rejected() {
-        let mut c = Config::default();
-        c.dns.records = vec![DnsRecord {
-            name: "wizard.lan".into(),
-            addr: Some("wizard.lan".into()),
-        }];
-        assert!(c.validate().is_err());
-    }
-
-    #[test]
-    fn dns_bad_addr_hostname_rejected() {
-        let mut c = Config::default();
-        c.dns.records = vec![DnsRecord {
-            name: "wizard.lan".into(),
-            addr: Some("not a host".into()),
-        }];
-        assert!(c.validate().is_err());
+    fn dns_addr_must_be_ipv4() {
+        let text = r#"{
+            "dns": {
+                "enabled": true,
+                "records": [{"name": "wizard.lan", "addr": "bigfred.lan"}]
+            }
+        }"#;
+        assert!(serde_json::from_str::<Config>(text).is_err());
     }
 }

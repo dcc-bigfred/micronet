@@ -39,7 +39,7 @@ Typowe mapowanie:
 | Sam TL-SF1006P | brak | `gateway` | dnsmasq na BigFredzie |
 | TL-SF1006P + router na wolnym porcie | tak (router) | `client` albo `static` | router |
 
-Nie edytujesz dnsmasq ręcznie pod setup eventu. JSON: `$DATA_DIR/etc/micronet.json` (hot-reload). Opcjonalne `"dns": { "enabled": true, "records": [ { "name": "bigfred.lan" } ] }` dodaje tradycyjne nazwy; bez `addr` używane jest `gateway.ip`, albo `addr` to IPv4 lub hostname (CNAME).
+Nie edytujesz dnsmasq ręcznie pod setup eventu. JSON: `$DATA_DIR/etc/micronet.json` (hot-reload). Opcjonalne `"dns": { "enabled": true, "records": [ { "name": "bigfred.lan" } ] }` dodaje tradycyjne nazwy; bez `addr` używane jest `gateway.ip`, albo `addr` to IPv4.
 
 ---
 

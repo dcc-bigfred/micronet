@@ -11,7 +11,7 @@ DHCPDISCOVER probe and a ping of `gateway.ip`.
 - If a router/DHCP server appears later, gateway mode **yields**: stops dnsmasq and runs `dhclient`
 - DHCPDISCOVER only (no REQUEST); ICMP ping of `gateway.ip` after a temporary `.252`
 - dnsmasq only in `gateway` (pool `.50–.200`, sticky MAC→IP lease **7d**, `option:router` / `dns-server`)
-- Optional `dns` section in JSON: static unicast names (`host-record=` / `cname=`) served only in `gateway`
+- Optional `dns` section in JSON: static unicast A records (`host-record=`) served only in `gateway`
 - Physical Ethernet only (not `lo`, bridge, virtual, Wi-Fi)
 - JSON camelCase under `$DATA_DIR/etc/micronet.json` (no hardcoded `/data/...`); invalid reload keeps the previous config
 - Unix socket `$DATA_DIR/run/micronet.sock` (4-byte LE length + JSON)

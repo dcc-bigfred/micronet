@@ -154,6 +154,9 @@ pub fn apply_with<N: NetOps, G: GatewayCtl>(
 ) -> Result<Status> {
     cfg.validate()?;
     let iface = net.resolve_iface(cfg.interface.as_deref())?;
+    if policy != ProbePolicy::SkipDhcpWhileGateway {
+        isolate_iface(net, &iface);
+    }
     net.bring_up(&iface)?;
     net.stop_dhclient(&iface)?;
 
@@ -183,7 +186,7 @@ pub fn apply_with<N: NetOps, G: GatewayCtl>(
     net.add_addr(&iface, &static_cidr)?;
 
     let ping_target = cfg.gateway.ip;
-    let gateway_reachable = if net.iface_has_addr(&iface, ping_target) {
+    let gateway_reachable = if net.ipv4_addr_is_local(ping_target) {
         false
     } else {
         net.ping(ping_target)
@@ -197,15 +200,14 @@ pub fn apply_with<N: NetOps, G: GatewayCtl>(
     }
 }
 
-/// Stop managed dnsmasq/dhclient and flush the resolved iface.
+/// Stop managed dnsmasq/dhclient and flush every physical Ethernet.
 pub fn teardown_with<N: NetOps, G: GatewayCtl>(cfg: &Config, net: &N, gw: &G) -> Result<Status> {
     cfg.validate()?;
     // Passive: apply already admin-upped the iface; don't `ip link set up`
     // all candidates during teardown.
     let iface = net.resolve_iface_passive(cfg.interface.as_deref())?;
     gw.dhcp_stop()?;
-    net.stop_dhclient(&iface)?;
-    net.flush_addr(&iface)?;
+    flush_all_ethernet(net);
     net.del_default()?;
     Ok(Status {
         mode: Mode::Gateway,
@@ -226,18 +228,77 @@ pub fn teardown(cfg: &Config) -> Result<Status> {
 #[must_use]
 pub fn live_health<N: NetOps, G: GatewayCtl>(mode: Mode, iface: &str, net: &N, gw: &G) -> bool {
     if iface.is_empty() {
+        log::debug!("live_health: empty iface");
         return false;
     }
     if !net.carrier_up(iface) {
+        log::debug!("live_health: {iface} no carrier (treat as healthy)");
         return true;
     }
     if net.iface_ipv4_cidr(iface).is_none() {
+        log::debug!("live_health: {iface} has carrier but no IPv4");
         return false;
     }
     match mode {
-        Mode::Gateway => gw.dhcp_running(),
-        Mode::Client => net.dhclient_running(iface),
+        Mode::Gateway => {
+            let ok = gw.dhcp_running();
+            if !ok {
+                log::debug!("live_health: {iface} gateway without dnsmasq");
+            }
+            ok
+        }
+        Mode::Client => {
+            let ok = net.dhclient_running(iface);
+            if !ok {
+                log::debug!("live_health: {iface} client without dhclient");
+            }
+            ok
+        }
         Mode::Static => true,
+    }
+}
+
+/// Admin-down every physical Ethernet except `keep` (best-effort).
+fn isolate_iface<N: NetOps>(net: &N, keep: &str) {
+    let names = match net.list_ethernet() {
+        Ok(n) => n,
+        Err(e) => {
+            log::warn!("isolate: list ethernet failed ({e}); leaving other ifaces as-is");
+            return;
+        }
+    };
+    for name in names {
+        if name == keep {
+            continue;
+        }
+        if let Err(e) = net.stop_dhclient(&name) {
+            log::debug!("isolate {name}: stop dhclient: {e}");
+        }
+        if let Err(e) = net.flush_addr(&name) {
+            log::debug!("isolate {name}: flush: {e}");
+        }
+        match net.set_down(&name) {
+            Ok(()) => log::info!("isolate: {name} down (keeping {keep})"),
+            Err(e) => log::debug!("isolate {name}: set down: {e}"),
+        }
+    }
+}
+
+fn flush_all_ethernet<N: NetOps>(net: &N) {
+    let names = match net.list_ethernet() {
+        Ok(n) => n,
+        Err(e) => {
+            log::warn!("flush all ethernet: list failed ({e})");
+            return;
+        }
+    };
+    for name in names {
+        if let Err(e) = net.stop_dhclient(&name) {
+            log::debug!("flush {name}: stop dhclient: {e}");
+        }
+        if let Err(e) = net.flush_addr(&name) {
+            log::debug!("flush {name}: {e}");
+        }
     }
 }
 
@@ -348,54 +409,79 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::error::Error;
+    use std::collections::HashMap;
     use std::net::Ipv4Addr;
     use std::sync::Mutex;
 
     struct FakeNet {
         ping_ok: bool,
-        addrs: Mutex<Vec<Ipv4Addr>>,
+        addrs: Mutex<HashMap<String, Vec<Ipv4Addr>>>,
         dhclient: Mutex<bool>,
         default_via: Mutex<Option<Ipv4Addr>>,
         carrier: bool,
         // For auto-pick tests: ordered iface names with per-iface carrier.
         // Empty → single-iface mode (`eth0`, `carrier`).
         ifaces: Vec<String>,
-        carriers: std::collections::HashMap<String, bool>,
+        carriers: HashMap<String, bool>,
+        flushed: Mutex<Vec<String>>,
+        downed: Mutex<Vec<String>>,
+        sticky_local: Mutex<Vec<Ipv4Addr>>,
+        fail_list: bool,
     }
 
     impl FakeNet {
         fn new(ping_ok: bool) -> Self {
             Self {
                 ping_ok,
-                addrs: Mutex::new(Vec::new()),
+                addrs: Mutex::new(HashMap::new()),
                 dhclient: Mutex::new(false),
                 default_via: Mutex::new(None),
                 carrier: true,
                 ifaces: Vec::new(),
-                carriers: std::collections::HashMap::new(),
+                carriers: HashMap::new(),
+                flushed: Mutex::new(Vec::new()),
+                downed: Mutex::new(Vec::new()),
+                sticky_local: Mutex::new(Vec::new()),
+                fail_list: false,
             }
         }
 
         /// Multi-iface mode: `auto` picks the first iface with carrier=true.
         fn with_ifaces(ping_ok: bool, ifaces: &[(&str, bool)]) -> Self {
-            let mut carriers = std::collections::HashMap::new();
+            let mut carriers = HashMap::new();
             for (n, c) in ifaces {
                 carriers.insert((*n).to_string(), *c);
             }
             Self {
                 ping_ok,
-                addrs: Mutex::new(Vec::new()),
+                addrs: Mutex::new(HashMap::new()),
                 dhclient: Mutex::new(false),
                 default_via: Mutex::new(None),
                 carrier: true,
                 ifaces: ifaces.iter().map(|(n, _)| (*n).to_string()).collect(),
                 carriers,
+                flushed: Mutex::new(Vec::new()),
+                downed: Mutex::new(Vec::new()),
+                sticky_local: Mutex::new(Vec::new()),
+                fail_list: false,
             }
+        }
+
+        fn push_addr(&self, iface: &str, ip: Ipv4Addr) {
+            self.addrs
+                .lock()
+                .unwrap()
+                .entry(iface.to_string())
+                .or_default()
+                .push(ip);
         }
     }
 
     impl NetOps for FakeNet {
         fn list_ethernet(&self) -> Result<Vec<String>> {
+            if self.fail_list {
+                return Err(Error::NoEthernet);
+            }
             if self.ifaces.is_empty() {
                 Ok(vec!["eth0".into()])
             } else {
@@ -431,37 +517,57 @@ mod tests {
         fn bring_up(&self, _iface: &str) -> Result<()> {
             Ok(())
         }
-        fn flush_addr(&self, _iface: &str) -> Result<()> {
-            self.addrs.lock().unwrap().clear();
+        fn flush_addr(&self, iface: &str) -> Result<()> {
+            self.flushed.lock().unwrap().push(iface.to_string());
+            self.addrs.lock().unwrap().remove(iface);
             Ok(())
         }
-        fn add_addr(&self, _iface: &str, cidr: &str) -> Result<()> {
+        fn add_addr(&self, iface: &str, cidr: &str) -> Result<()> {
             let ip = cidr
                 .split('/')
                 .next()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(Ipv4Addr::UNSPECIFIED);
-            self.addrs.lock().unwrap().push(ip);
+            self.push_addr(iface, ip);
             Ok(())
         }
         fn iface_has_ipv4(&self, iface: &str) -> bool {
             self.iface_ipv4_cidr(iface).is_some()
         }
-        fn iface_has_addr(&self, _iface: &str, ip: Ipv4Addr) -> bool {
-            self.addrs.lock().unwrap().contains(&ip)
+        fn iface_has_addr(&self, iface: &str, ip: Ipv4Addr) -> bool {
+            self.addrs
+                .lock()
+                .unwrap()
+                .get(iface)
+                .is_some_and(|v| v.contains(&ip))
         }
-        fn iface_ipv4_cidr(&self, _iface: &str) -> Option<String> {
+        fn iface_ipv4_cidr(&self, iface: &str) -> Option<String> {
             if *self.dhclient.lock().unwrap() {
                 return Some("192.168.0.50/24".into());
             }
             self.addrs
                 .lock()
                 .unwrap()
-                .first()
+                .get(iface)
+                .and_then(|v| v.first())
                 .map(|ip| format!("{ip}/{REQUIRED_PREFIX}"))
         }
-        fn carrier_up(&self, _iface: &str) -> bool {
-            self.carrier
+        fn carrier_up(&self, iface: &str) -> bool {
+            if self.ifaces.is_empty() {
+                self.carrier
+            } else {
+                self.carriers.get(iface).copied().unwrap_or(false)
+            }
+        }
+        fn set_down(&self, iface: &str) -> Result<()> {
+            self.downed.lock().unwrap().push(iface.to_string());
+            Ok(())
+        }
+        fn ipv4_addr_is_local(&self, ip: Ipv4Addr) -> bool {
+            if self.sticky_local.lock().unwrap().contains(&ip) {
+                return true;
+            }
+            self.addrs.lock().unwrap().values().any(|v| v.contains(&ip))
         }
         fn ping(&self, _host: Ipv4Addr) -> bool {
             self.ping_ok
@@ -621,15 +727,13 @@ mod tests {
         let gw = FakeGw::new(false);
         *gw.running.lock().unwrap() = true;
         *net.dhclient.lock().unwrap() = true;
-        net.addrs
-            .lock()
-            .unwrap()
-            .push(Ipv4Addr::new(192, 168, 0, 1));
+        net.push_addr("eth0", Ipv4Addr::new(192, 168, 0, 1));
         let s = teardown_with(&cfg, &net, &gw).unwrap();
         assert!(s.cidr.is_none());
         assert!(!*gw.running.lock().unwrap());
         assert!(!*net.dhclient.lock().unwrap());
         assert!(net.addrs.lock().unwrap().is_empty());
+        assert!(net.flushed.lock().unwrap().contains(&"eth0".to_string()));
     }
 
     #[test]
@@ -664,10 +768,7 @@ mod tests {
         assert!(!live_health(Mode::Gateway, "", &net, &gw));
 
         *gw.running.lock().unwrap() = true;
-        net.addrs
-            .lock()
-            .unwrap()
-            .push(Ipv4Addr::new(192, 168, 0, 1));
+        net.push_addr("eth0", Ipv4Addr::new(192, 168, 0, 1));
         assert!(live_health(Mode::Gateway, "eth0", &net, &gw));
         *gw.running.lock().unwrap() = false;
         assert!(!live_health(Mode::Gateway, "eth0", &net, &gw));
@@ -680,10 +781,7 @@ mod tests {
         assert!(live_health(Mode::Client, "eth0", &net, &gw));
         *net.dhclient.lock().unwrap() = false;
         net.addrs.lock().unwrap().clear();
-        net.addrs
-            .lock()
-            .unwrap()
-            .push(Ipv4Addr::new(192, 168, 0, 252));
+        net.push_addr("eth0", Ipv4Addr::new(192, 168, 0, 252));
         assert!(!live_health(Mode::Client, "eth0", &net, &gw));
         assert!(live_health(Mode::Static, "eth0", &net, &gw));
     }
@@ -695,5 +793,68 @@ mod tests {
         assert_eq!(v, vec![cfg.gateway.ip]);
         let v = periodic_ignore_servers(&cfg, Some("192.168.0.50/24"));
         assert_eq!(v, vec![cfg.gateway.ip, Ipv4Addr::new(192, 168, 0, 50)]);
+    }
+
+    #[test]
+    fn apply_isolates_non_selected_ethernet() {
+        let cfg = Config::default();
+        let net = FakeNet::with_ifaces(false, &[("eth0", false), ("eth1", true)]);
+        net.push_addr("eth0", Ipv4Addr::new(192, 168, 0, 1));
+        let gw = FakeGw::new(false);
+        let s = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap();
+        assert_eq!(s.iface, "eth1");
+        assert_eq!(s.mode, Mode::Gateway);
+        assert_eq!(s.cidr.as_deref(), Some("192.168.0.1/24"));
+        assert!(net.downed.lock().unwrap().contains(&"eth0".to_string()));
+        assert!(!net.downed.lock().unwrap().contains(&"eth1".to_string()));
+        assert!(net.flushed.lock().unwrap().contains(&"eth0".to_string()));
+        assert!(!net.addrs.lock().unwrap().contains_key("eth0"));
+        assert_eq!(
+            net.addrs.lock().unwrap().get("eth1"),
+            Some(&vec![Ipv4Addr::new(192, 168, 0, 1)])
+        );
+    }
+
+    #[test]
+    fn gateway_ip_local_on_other_iface_is_not_reachable() {
+        let cfg = Config::default();
+        let net = FakeNet::new(true);
+        net.sticky_local
+            .lock()
+            .unwrap()
+            .push(Ipv4Addr::new(192, 168, 0, 1));
+        let gw = FakeGw::new(false);
+        let s = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap();
+        assert_eq!(s.mode, Mode::Gateway);
+        assert_eq!(s.cidr.as_deref(), Some("192.168.0.1/24"));
+        assert!(*gw.started.lock().unwrap());
+        assert!(net.default_via.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn isolate_survives_list_ethernet_error() {
+        let cfg = Config::default();
+        let mut net = FakeNet::with_ifaces(false, &[("eth0", false), ("eth1", true)]);
+        net.fail_list = true;
+        let gw = FakeGw::new(false);
+        let s = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap();
+        assert_eq!(s.iface, "eth1");
+        assert_eq!(s.mode, Mode::Gateway);
+        assert!(net.downed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn teardown_flushes_all_ethernet() {
+        let cfg = Config::default();
+        let net = FakeNet::with_ifaces(false, &[("eth0", false), ("eth1", true)]);
+        net.push_addr("eth0", Ipv4Addr::new(192, 168, 0, 1));
+        net.push_addr("eth1", Ipv4Addr::new(192, 168, 0, 252));
+        let gw = FakeGw::new(false);
+        let s = teardown_with(&cfg, &net, &gw).unwrap();
+        assert!(s.cidr.is_none());
+        let flushed = net.flushed.lock().unwrap().clone();
+        assert!(flushed.contains(&"eth0".to_string()));
+        assert!(flushed.contains(&"eth1".to_string()));
+        assert!(net.addrs.lock().unwrap().is_empty());
     }
 }

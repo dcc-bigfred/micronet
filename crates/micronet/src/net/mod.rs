@@ -23,7 +23,8 @@ const DEFAULT_SYS_CLASS_NET: &str = "/sys/class/net";
 /// JSON `interface` sentinel: same as `null` (carrier-based pick).
 const AUTO_IFACE: &str = "auto";
 /// How long `resolve_auto` waits for PHY auto-negotiation after admin-up.
-const AUTO_CARRIER_WAIT_MS: u64 = 2000;
+/// USB Ethernet often needs more than 2 s after cold-boot enumeration.
+const AUTO_CARRIER_WAIT_MS: u64 = 5000;
 /// `resolve_auto` carrier poll interval.
 const AUTO_CARRIER_POLL_MS: u64 = 200;
 
@@ -57,6 +58,10 @@ pub trait NetOps {
     fn iface_has_addr(&self, iface: &str, ip: Ipv4Addr) -> bool;
     fn iface_ipv4_cidr(&self, iface: &str) -> Option<String>;
     fn carrier_up(&self, iface: &str) -> bool;
+    /// `ip link set down` (isolate non-selected Ethernet).
+    fn set_down(&self, iface: &str) -> Result<()>;
+    /// True if `ip` is configured as an inet address on any interface.
+    fn ipv4_addr_is_local(&self, ip: Ipv4Addr) -> bool;
     fn ping(&self, host: Ipv4Addr) -> bool;
     /// Stop the dhclient instance owned for `iface` (pidfile). Returns after daemonize, not after ACK.
     fn stop_dhclient(&self, iface: &str) -> Result<()>;
@@ -147,6 +152,14 @@ impl NetOps for LiveNet {
         carrier_up(iface)
     }
 
+    fn set_down(&self, iface: &str) -> Result<()> {
+        run_cmd(IP_BIN, &["link", "set", "dev", iface, "down"])
+    }
+
+    fn ipv4_addr_is_local(&self, ip: Ipv4Addr) -> bool {
+        ipv4_addr_is_local(ip)
+    }
+
     fn ping(&self, host: Ipv4Addr) -> bool {
         run_cmd(
             PING_BIN,
@@ -214,8 +227,9 @@ fn cidr_ip(cidr: &str) -> Ipv4Addr {
 }
 
 /// Pick a physical Ethernet: `null` / omitted / `"auto"` → first with carrier
-/// (after a best-effort `ip link set up`); no carrier → first sorted name.
-/// Any other string is an explicit device and must pass the physical filter.
+/// (after a best-effort `ip link set up`, waiting up to 5 s); no carrier →
+/// first sorted name. Any other string is an explicit device and must pass
+/// the physical filter.
 pub fn resolve_iface(sys_class_net: &Path, configured: Option<&str>) -> Result<String> {
     resolve_iface_with(sys_class_net, configured, LinkBringUp::Live)
 }
@@ -355,6 +369,18 @@ pub fn iface_ipv4_cidr(iface: &str) -> Option<String> {
         .output()
         .ok()?;
     addr::parse_first_inet_cidr(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Any iface currently has `ip` as a configured IPv4 (`ip -4 -o addr show`).
+#[must_use]
+pub fn ipv4_addr_is_local(ip: Ipv4Addr) -> bool {
+    let Ok(out) = Command::new(IP_BIN)
+        .args(["-4", "-o", "addr", "show"])
+        .output()
+    else {
+        return false;
+    };
+    addr::stdout_has_ipv4(&String::from_utf8_lossy(&out.stdout), ip)
 }
 
 /// Carrier detected (`/sys/class/net/<iface>/carrier` or `ip link` `state UP`).
@@ -498,6 +524,7 @@ mod tests {
 
     #[test]
     fn auto_picks_carrier_not_first_sorted() {
+        // SysfsOnly: single carrier read (AUTO_CARRIER_WAIT_MS is Live-only).
         let dir = tempdir().unwrap();
         let sys = dir.path().join("net");
         physical_eth(&sys, "eth0", "0\n");

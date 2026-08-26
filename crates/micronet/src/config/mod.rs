@@ -158,8 +158,8 @@ pub struct DnsRecord {
 #[serde(rename_all = "camelCase")]
 pub struct Config {
     /// Physical Ethernet name. `null` / omitted / `"auto"` → first physical
-    /// Ethernet with carrier (else first sorted name). Any other string is
-    /// an explicit device.
+    /// Ethernet with carrier (else first sorted name); other cable Ethernet
+    /// is admin-down. Any other string is an explicit device (pinned).
     #[serde(default)]
     pub interface: Option<String>,
     #[serde(default)]

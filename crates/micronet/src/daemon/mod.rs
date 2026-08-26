@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 
 use crate::apply::{self, live_health, GatewayCtl, LiveGateway, ProbePolicy, Status};
 use crate::config;
-use crate::constants::{GATEWAY_FOREIGN_DHCP_INTERVAL, STATUS_REFRESH};
+use crate::constants::{
+    CARRIER_LOST_GRACE, CARRIER_REAPPLY_BACKOFF, GATEWAY_FOREIGN_DHCP_INTERVAL, STATUS_REFRESH,
+};
 use crate::error::{Error, Result};
 use crate::ipc::{self, IpcEvent, Shared};
 use crate::net::LiveNet;
@@ -44,6 +46,78 @@ pub(crate) enum Recheck {
 #[must_use]
 pub(crate) fn should_yield_gateway(current_epoch: u64, result: Recheck) -> bool {
     matches!(result, Recheck::Foreign(e) if e == current_epoch)
+}
+
+/// True when auto-picked iface should be re-resolved after sustained carrier loss.
+#[must_use]
+pub(crate) fn should_reapply_on_carrier_loss(
+    carrier: bool,
+    lost_since: Option<Instant>,
+    now: Instant,
+    next_allowed: Option<Instant>,
+) -> bool {
+    if carrier {
+        return false;
+    }
+    let Some(since) = lost_since else {
+        return false;
+    };
+    if now.saturating_duration_since(since) < CARRIER_LOST_GRACE {
+        return false;
+    }
+    !matches!(next_allowed, Some(t) if now < t)
+}
+
+fn iface_is_pinned(cfg: &config::Config) -> bool {
+    !matches!(cfg.interface.as_deref(), None | Some("auto"))
+}
+
+fn maybe_carrier_reapply(
+    shared: &Shared,
+    net: &LiveNet,
+    epoch: &AtomicU64,
+    lost_since: &mut Option<Instant>,
+    next_allowed: &mut Option<Instant>,
+) {
+    let cfg = match shared.config.read() {
+        Ok(c) => c.clone(),
+        Err(_) => return,
+    };
+    if iface_is_pinned(&cfg) {
+        *lost_since = None;
+        return;
+    }
+    let iface = match shared.status.read() {
+        Ok(s) => s.iface.clone(),
+        Err(_) => return,
+    };
+    if iface.is_empty() {
+        return;
+    }
+    let now = Instant::now();
+    if net.carrier_up(&iface) {
+        *lost_since = None;
+        return;
+    }
+    if lost_since.is_none() {
+        *lost_since = Some(now);
+    }
+    if !should_reapply_on_carrier_loss(false, *lost_since, now, *next_allowed) {
+        return;
+    }
+    log::info!("carrier lost on {iface} for {CARRIER_LOST_GRACE:?}; re-applying");
+    bump_epoch(epoch);
+    match apply::apply(&cfg, ProbePolicy::Full) {
+        Ok(s) => {
+            log::info!("carrier re-apply → {} iface {}", s.mode.as_str(), s.iface);
+            if let Ok(mut st) = shared.status.write() {
+                *st = s;
+            }
+        }
+        Err(e) => log::warn!("carrier re-apply failed: {e}"),
+    }
+    *next_allowed = Some(Instant::now() + CARRIER_REAPPLY_BACKOFF);
+    *lost_since = None;
 }
 
 /// Run until SIGTERM/SIGINT.
@@ -83,6 +157,8 @@ pub fn run(config_path: &Path, socket: &Path) -> Result<()> {
     let (recheck_tx, recheck_rx) = mpsc::channel();
     let mut next_refresh = Instant::now() + STATUS_REFRESH;
     let mut next_gateway_probe = Instant::now() + GATEWAY_FOREIGN_DHCP_INTERVAL;
+    let mut carrier_lost_since: Option<Instant> = None;
+    let mut next_carrier_reapply: Option<Instant> = None;
     loop {
         if stop.load(Ordering::SeqCst) {
             break;
@@ -106,6 +182,13 @@ pub fn run(config_path: &Path, socket: &Path) -> Result<()> {
         }
         if Instant::now() >= next_refresh {
             refresh_live_status(&shared, &net, &gw);
+            maybe_carrier_reapply(
+                &shared,
+                &net,
+                &epoch,
+                &mut carrier_lost_since,
+                &mut next_carrier_reapply,
+            );
             maybe_spawn_gateway_recheck(
                 &shared,
                 &net,
@@ -324,10 +407,13 @@ pub fn check_liveness(socket: &Path, config_path: &Path, style: CheckStyle) -> R
             Ok(live_health(mode, &iface, &LiveNet::new(), &LiveGateway))
         }
         Ok(_) => Ok(false),
-        Err(Error::IoPath { .. }) | Err(Error::Io(_)) => match style {
-            CheckStyle::Daemon => Ok(false),
-            CheckStyle::Legacy => legacy_iface_up(config_path),
-        },
+        Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
+            log::debug!("check_liveness: daemon socket unreachable");
+            match style {
+                CheckStyle::Daemon => Ok(false),
+                CheckStyle::Legacy => legacy_iface_up(config_path),
+            }
+        }
         Err(e) => Err(e),
     }
 }
@@ -360,5 +446,28 @@ mod tests {
         assert!(!should_yield_gateway(1, Recheck::Empty(1)));
         assert!(!should_yield_gateway(1, Recheck::Failed(1)));
         assert!(!should_yield_gateway(2, Recheck::Foreign(1)));
+    }
+
+    #[test]
+    fn carrier_loss_reapply_matrix() {
+        let now = Instant::now() + Duration::from_secs(20);
+        let lost = now - Duration::from_secs(11);
+        assert!(!should_reapply_on_carrier_loss(true, Some(lost), now, None));
+        assert!(!should_reapply_on_carrier_loss(false, None, now, None));
+        assert!(!should_reapply_on_carrier_loss(false, Some(now), now, None));
+        assert!(should_reapply_on_carrier_loss(false, Some(lost), now, None));
+        assert!(!should_reapply_on_carrier_loss(
+            false,
+            Some(lost),
+            now,
+            Some(now + Duration::from_secs(5))
+        ));
+        let past = now - Duration::from_secs(1);
+        assert!(should_reapply_on_carrier_loss(
+            false,
+            Some(lost),
+            now,
+            Some(past)
+        ));
     }
 }

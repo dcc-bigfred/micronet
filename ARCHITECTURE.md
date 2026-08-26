@@ -3,13 +3,15 @@
 This file is the canonical architecture source. Event WiFi cabling and
 operator checklists live in [`docs/networking/`](docs/networking/README.md).
 
-`micronet` is the network daemon for BigFred OS: it brings up **physical
-Ethernet**, probes for a foreign DHCP server, optionally pings
-`gateway.ip`, and applies one of three modes (`client` / `gateway` /
-`static`). Clients on the same L2 subnet need **no extra routing table**:
-dnsmasq `option:router` and `option:dns-server` are enough; `ip addr add`
-installs the connected route. This task does **not** enable
-`ip_forward` or NAT.
+`micronet` is the network daemon for BigFred OS. It **owns every
+cable Ethernet interface** on the hub (physical `ARPHRD_ETHER`; not
+Wi-Fi, loopback, bridge, or virtual): it picks **one** with a cable,
+admin-downs the rest, probes for a foreign DHCP server, optionally
+pings `gateway.ip`, and applies one of three modes (`client` /
+`gateway` / `static`). Clients on the same L2 subnet need **no extra
+routing table**: dnsmasq `option:router` and `option:dns-server` are
+enough; `ip addr add` installs the connected route. This task does
+**not** enable `ip_forward` or NAT.
 
 ---
 
@@ -25,10 +27,14 @@ installs the connected route. This task does **not** enable
    bool ladder. dnsmasq runs only in `gateway`.
 4. **Physical Ethernet only.** `ARPHRD_ETHER`, no `wireless`, sysfs
    realpath without `/devices/virtual/`, no bridge master, no
-   `IFF_LOOPBACK`. `interface` `null` / omitted / `"auto"` selects the
-   first candidate with sysfs `carrier=1` (after a best-effort
-   `ip link set up` on each); no carrier → first sorted name. Any other
-   configured name MUST pass the same filter.
+   `IFF_LOOPBACK`. micronet **manages all** such interfaces: exactly
+   one is up with an address; the others are flushed and
+   `ip link set down`. `interface` `null` / omitted / `"auto"` selects
+   the first candidate with sysfs `carrier=1` (after a best-effort
+   `ip link set up` on each, waiting up to **5 s** for PHY/USB
+   negotiation); no carrier → first sorted name. Any other configured
+   name MUST pass the same filter and **pins** the device (no
+   carrier-loss re-pick).
 5. **No NAT / `ip_forward`.** Isolated event LAN. Gateway mode has **no**
    default route. Static mode **does** `default via gateway.ip`.
 6. **dnsmasq** is DHCP+DNS for the event pool only (`listen-address` =
@@ -113,7 +119,7 @@ ARCHITECTURE.md
 | `pidfile` | TERM/KILL one process; never `killall` |
 | `apply` | probe policy, mode apply, teardown, live health |
 | `ipc` | `bind_singleton`, framing |
-| `daemon` | watch + IPC + apply + gateway recheck; socket path is **not** hot-reloaded |
+| `daemon` | watch + IPC + apply + gateway recheck + carrier-loss re-pick; socket path is **not** hot-reloaded |
 
 `net` and `dhcp` MUST NOT import `ipc`.
 
@@ -123,8 +129,10 @@ ARCHITECTURE.md
 
 0. Resolve the iface: `null` / omitted / `"auto"` → first physical Ethernet
    with carrier (candidates are admin-up first so sysfs `carrier` is
-   readable); none have carrier → first sorted name. An explicit name
-   skips this pick.
+   readable; wait ≤ **5 s**); none have carrier → first sorted name. An
+   explicit name skips this pick.
+0a. **Isolate:** every other physical Ethernet is `dhclient`-stopped,
+   address-flushed, and admin-down. Only the chosen iface stays up.
 1. Link up, no address; stop **our** leftover `dhclient` (per-iface pidfile).
    After `ip link set up`, best-effort `ethtool --set-eee … eee off`,
    `ethtool -K … tso off gso off`, and `ethtool -C … rx-usecs 0 tx-usecs 0`
@@ -137,8 +145,9 @@ ARCHITECTURE.md
    closed. Do **not** start dnsmasq when the probe did not complete.
 5. Valid offer → `client` (`dhclient -nw` with pidfile/leasefile).
 6. Else assign `staticHost` (default **252**), ping `gateway.ip`
-   (`-c 1 -W 2`). If `gateway.ip` is already local, treat ping as fail
-   (stay / become gateway).
+   (`-c 1 -W 2`). If `gateway.ip` is already a local inet on **any**
+   interface, treat ping as fail (stay / become gateway) — do not
+   mistake our own leftover `.1` for a foreign router.
 7. Ping OK → `static` (keep `.252`, `default via gateway.ip`, stop dnsmasq).
 8. Ping fail → `gateway` (drop `.252`, `gateway.ip/prefix`, dnsmasq,
    **no** default route).
@@ -161,6 +170,17 @@ Periodic probe errors stay gateway (already serving; uncertainty is not
 a yield). JSON reload while gateway still skips DISCOVER (`SkipDhcpWhileGateway`);
 the periodic probe covers “router appeared later.” IPC `reconfigure` is
 always a full probe.
+
+### 6.2 Carrier-loss re-pick (auto iface only)
+
+While `interface` is auto (`null` / omitted / `"auto"`), the daemon
+watches the chosen iface. No carrier for `CARRIER_LOST_GRACE` (10 s)
+triggers a full `apply` (admin-up all candidates, pick again, isolate
+the rest). `CARRIER_REAPPLY_BACKOFF` (30 s) caps how often this runs
+when nothing is plugged in. An **explicit** `interface` name skips
+this path. `live_health` still treats no-carrier as healthy so
+microinit does not restart-loop on unplug; recovery is this watchdog,
+not a liveness recycle.
 
 Process ownership: `$DATA_DIR/run/dnsmasq.pid` and
 `$DATA_DIR/run/dhclient.<iface>.pid`. Never `killall`.
@@ -220,8 +240,8 @@ gateway, `dhclient` in client, address only in static).
 daemon socket answers; if the socket is missing, iface UP + IPv4 only
 (legacy one-shot after `apply` exited).
 
-`micronet teardown`: stop our dnsmasq and dhclient, flush the managed
-iface, delete the default route (full service stop).
+`micronet teardown`: stop our dnsmasq and dhclient, flush **all**
+physical Ethernet addresses, delete the default route (full service stop).
 
 ---
 

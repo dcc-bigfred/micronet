@@ -19,9 +19,11 @@ For a non-technical operator. Goal: low-latency WiFi for throttles (`bigfred2`, 
 
 ## How BigFred networking works
 
-On boot, the **`micronet` daemon** (first physical Ethernet **with a cable**, else first Ethernet):
+On boot, the **`micronet` daemon** checks every cable Ethernet, brings
+up the first one **with a cable** (wait up to 5 s), and **downs** the
+rest. Then:
 
-1. Brings the interface up (no address).
+1. Brings the chosen interface up (no address).
 2. Sends **DHCPDISCOVER** and waits for a **DHCPOFFER** (no REQUEST).
 3. **Offer** → mode **`client`**: `dhclient`, no dnsmasq, no `gateway.ip` on the Pi.
 4. **No offer** → temporarily `.252` in the configured subnet, then `ping gateway.ip`:

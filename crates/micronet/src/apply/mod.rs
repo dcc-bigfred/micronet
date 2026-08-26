@@ -12,7 +12,6 @@ use crate::config::{
 use crate::constants::{DHCP_CLIENT_WAIT, REQUIRED_PREFIX};
 use crate::dhcp;
 use crate::error::Result;
-use crate::net::addr::cidr_ipv4;
 use crate::net::probe::{self, read_mac};
 use crate::net::{LiveNet, NetOps};
 
@@ -81,28 +80,12 @@ pub fn decide(foreign_dhcp: bool, gateway_reachable: bool) -> Mode {
     }
 }
 
-/// How apply should probe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProbePolicy {
-    /// Stop our dnsmasq, then DHCPDISCOVER + ping (start, IPC reconfigure).
-    Full,
-    /// Skip DHCPDISCOVER (we may be serving). Ping `gateway.ip` unless it is ours.
-    SkipDhcpWhileGateway,
-    /// Foreign DHCP already proved; stop our dnsmasq and start dhclient.
-    BecomeClient,
-}
-
 /// DHCP server + probe, injectable in tests (must not import `ipc`).
 pub trait GatewayCtl {
     fn dhcp_running(&self) -> bool;
     fn dhcp_stop(&self) -> Result<()>;
     fn dhcp_reload_or_restart(&self, cfg: &Config, iface: &str) -> Result<()>;
-    fn probe_foreign_dhcp(
-        &self,
-        iface: &str,
-        timeout: Duration,
-        ignore_servers: &[Ipv4Addr],
-    ) -> Result<bool>;
+    fn probe_foreign_dhcp(&self, iface: &str, timeout: Duration) -> Result<bool>;
 }
 
 /// Live dnsmasq + DHCPDISCOVER.
@@ -129,61 +112,41 @@ impl GatewayCtl for LiveGateway {
         dhcp::reload_or_restart(&conf_path, changed)
     }
 
-    fn probe_foreign_dhcp(
-        &self,
-        iface: &str,
-        timeout: Duration,
-        ignore_servers: &[Ipv4Addr],
-    ) -> Result<bool> {
+    fn probe_foreign_dhcp(&self, iface: &str, timeout: Duration) -> Result<bool> {
         let mac = read_mac(Path::new("/sys/class/net"), iface)?;
-        probe::probe_foreign_dhcp(iface, &mac, timeout, ignore_servers)
+        probe::probe_foreign_dhcp(iface, &mac, timeout)
     }
 }
 
-/// Apply configuration to the live system.
-pub fn apply(cfg: &Config, policy: ProbePolicy) -> Result<Status> {
-    apply_with(cfg, policy, &LiveNet::new(), &LiveGateway)
+/// Apply configuration to the live system (resolve, isolate, one DHCPDISCOVER, decide).
+pub fn apply(cfg: &Config) -> Result<Status> {
+    apply_with(cfg, &LiveNet::new(), &LiveGateway)
 }
 
 /// Apply with injected net + DHCP (unit tests).
-pub fn apply_with<N: NetOps, G: GatewayCtl>(
-    cfg: &Config,
-    policy: ProbePolicy,
-    net: &N,
-    gw: &G,
-) -> Result<Status> {
+pub fn apply_with<N: NetOps, G: GatewayCtl>(cfg: &Config, net: &N, gw: &G) -> Result<Status> {
     cfg.validate()?;
     let iface = net.resolve_iface(cfg.interface.as_deref())?;
-    if policy != ProbePolicy::SkipDhcpWhileGateway {
-        isolate_iface(net, &iface);
-    }
+    isolate_iface(net, &iface);
     net.bring_up(&iface)?;
     net.stop_dhclient(&iface)?;
 
-    if policy == ProbePolicy::BecomeClient {
-        return apply_client(cfg, net, gw, &iface);
+    if gw.dhcp_running() {
+        log::info!("stopping own dnsmasq before DHCP probe");
+        gw.dhcp_stop()?;
     }
-
-    let skip_dhcp = policy == ProbePolicy::SkipDhcpWhileGateway;
-    let foreign_dhcp = if skip_dhcp {
-        false
-    } else {
-        if gw.dhcp_running() {
-            log::info!("stopping own dnsmasq before DHCP probe");
-            gw.dhcp_stop()?;
-        }
-        gw.probe_foreign_dhcp(&iface, Duration::from_secs(cfg.probe_timeout_secs), &[])?
-    };
-
-    let static_cidr = cfg.static_cidr();
-    let static_ip = cfg.static_addr();
+    let foreign_dhcp =
+        gw.probe_foreign_dhcp(&iface, Duration::from_secs(cfg.probe_timeout_secs))?;
 
     if foreign_dhcp {
         return apply_client(cfg, net, gw, &iface);
     }
 
-    net.flush_addr(&iface)?;
-    net.add_addr(&iface, &static_cidr)?;
+    let static_cidr = cfg.static_cidr();
+    let static_ip = cfg.static_addr();
+    if !net.iface_has_ipv4(&iface) {
+        net.add_addr(&iface, &static_cidr)?;
+    }
 
     let ping_target = cfg.gateway.ip;
     let gateway_reachable = if net.ipv4_addr_is_local(ping_target) {
@@ -223,42 +186,8 @@ pub fn teardown(cfg: &Config) -> Result<Status> {
     teardown_with(cfg, &LiveNet::new(), &LiveGateway)
 }
 
-/// Live liveness: empty iface fails; no carrier succeeds (avoid unplug restart loops);
-/// with carrier require a live IPv4 plus the process that belongs to the mode.
-#[must_use]
-pub fn live_health<N: NetOps, G: GatewayCtl>(mode: Mode, iface: &str, net: &N, gw: &G) -> bool {
-    if iface.is_empty() {
-        log::debug!("live_health: empty iface");
-        return false;
-    }
-    if !net.carrier_up(iface) {
-        log::debug!("live_health: {iface} no carrier (treat as healthy)");
-        return true;
-    }
-    if net.iface_ipv4_cidr(iface).is_none() {
-        log::debug!("live_health: {iface} has carrier but no IPv4");
-        return false;
-    }
-    match mode {
-        Mode::Gateway => {
-            let ok = gw.dhcp_running();
-            if !ok {
-                log::debug!("live_health: {iface} gateway without dnsmasq");
-            }
-            ok
-        }
-        Mode::Client => {
-            let ok = net.dhclient_running(iface);
-            if !ok {
-                log::debug!("live_health: {iface} client without dhclient");
-            }
-            ok
-        }
-        Mode::Static => true,
-    }
-}
-
 /// Admin-down every physical Ethernet except `keep` (best-effort).
+/// Already-down ifaces without an address are skipped.
 fn isolate_iface<N: NetOps>(net: &N, keep: &str) {
     let names = match net.list_ethernet() {
         Ok(n) => n,
@@ -269,6 +198,9 @@ fn isolate_iface<N: NetOps>(net: &N, keep: &str) {
     };
     for name in names {
         if name == keep {
+            continue;
+        }
+        if !net.link_is_up(&name) && net.iface_ipv4_cidr(&name).is_none() {
             continue;
         }
         if let Err(e) = net.stop_dhclient(&name) {
@@ -352,14 +284,17 @@ fn apply_gateway<N: NetOps, G: GatewayCtl>(
     gw: &G,
     iface: &str,
 ) -> Result<Status> {
-    net.flush_addr(iface)?;
-    net.add_addr(iface, &cfg.gateway_cidr())?;
+    let want = cfg.gateway_cidr();
+    if net.iface_ipv4_cidr(iface).as_deref() != Some(want.as_str()) {
+        net.flush_addr(iface)?;
+        net.add_addr(iface, &want)?;
+    }
     net.del_default()?;
     gw.dhcp_reload_or_restart(cfg, iface)?;
     Ok(Status {
         mode: Mode::Gateway,
         iface: iface.to_string(),
-        cidr: Some(cfg.gateway_cidr()),
+        cidr: Some(want),
         foreign_dhcp: false,
         gateway_reachable: false,
         dnsmasq_running: gw.dhcp_running(),
@@ -390,18 +325,6 @@ pub fn decide_status(
     }
 }
 
-/// Ignore list for a periodic gateway probe: configured gateway.ip plus local inet.
-#[must_use]
-pub fn periodic_ignore_servers(cfg: &Config, local_cidr: Option<&str>) -> Vec<Ipv4Addr> {
-    let mut ignore = vec![cfg.gateway.ip];
-    if let Some(ip) = local_cidr.and_then(cidr_ipv4) {
-        if !ignore.contains(&ip) {
-            ignore.push(ip);
-        }
-    }
-    ignore
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -409,7 +332,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::error::Error;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::net::Ipv4Addr;
     use std::sync::Mutex;
 
@@ -425,12 +348,16 @@ mod tests {
         carriers: HashMap<String, bool>,
         flushed: Mutex<Vec<String>>,
         downed: Mutex<Vec<String>>,
+        upped: Mutex<Vec<String>>,
+        admin_up: Mutex<HashSet<String>>,
         sticky_local: Mutex<Vec<Ipv4Addr>>,
         fail_list: bool,
     }
 
     impl FakeNet {
         fn new(ping_ok: bool) -> Self {
+            let mut admin_up = HashSet::new();
+            admin_up.insert("eth0".into());
             Self {
                 ping_ok,
                 addrs: Mutex::new(HashMap::new()),
@@ -441,6 +368,8 @@ mod tests {
                 carriers: HashMap::new(),
                 flushed: Mutex::new(Vec::new()),
                 downed: Mutex::new(Vec::new()),
+                upped: Mutex::new(Vec::new()),
+                admin_up: Mutex::new(admin_up),
                 sticky_local: Mutex::new(Vec::new()),
                 fail_list: false,
             }
@@ -449,8 +378,12 @@ mod tests {
         /// Multi-iface mode: `auto` picks the first iface with carrier=true.
         fn with_ifaces(ping_ok: bool, ifaces: &[(&str, bool)]) -> Self {
             let mut carriers = HashMap::new();
+            let mut admin_up = HashSet::new();
             for (n, c) in ifaces {
                 carriers.insert((*n).to_string(), *c);
+                if *c {
+                    admin_up.insert((*n).to_string());
+                }
             }
             Self {
                 ping_ok,
@@ -462,6 +395,8 @@ mod tests {
                 carriers,
                 flushed: Mutex::new(Vec::new()),
                 downed: Mutex::new(Vec::new()),
+                upped: Mutex::new(Vec::new()),
+                admin_up: Mutex::new(admin_up),
                 sticky_local: Mutex::new(Vec::new()),
                 fail_list: false,
             }
@@ -497,7 +432,6 @@ mod tests {
                     if self.ifaces.is_empty() {
                         return Ok("eth0".into());
                     }
-                    // First with carrier, else first sorted.
                     let pick = self
                         .ifaces
                         .iter()
@@ -514,7 +448,12 @@ mod tests {
                 }
             }
         }
-        fn bring_up(&self, _iface: &str) -> Result<()> {
+        fn bring_up(&self, iface: &str) -> Result<()> {
+            if self.link_is_up(iface) {
+                return Ok(());
+            }
+            self.upped.lock().unwrap().push(iface.to_string());
+            self.admin_up.lock().unwrap().insert(iface.to_string());
             Ok(())
         }
         fn flush_addr(&self, iface: &str) -> Result<()> {
@@ -559,8 +498,12 @@ mod tests {
                 self.carriers.get(iface).copied().unwrap_or(false)
             }
         }
+        fn link_is_up(&self, iface: &str) -> bool {
+            self.admin_up.lock().unwrap().contains(iface)
+        }
         fn set_down(&self, iface: &str) -> Result<()> {
             self.downed.lock().unwrap().push(iface.to_string());
+            self.admin_up.lock().unwrap().remove(iface);
             Ok(())
         }
         fn ipv4_addr_is_local(&self, ip: Ipv4Addr) -> bool {
@@ -627,12 +570,7 @@ mod tests {
             *self.started.lock().unwrap() = true;
             Ok(())
         }
-        fn probe_foreign_dhcp(
-            &self,
-            _iface: &str,
-            _timeout: Duration,
-            _ignore_servers: &[Ipv4Addr],
-        ) -> Result<bool> {
+        fn probe_foreign_dhcp(&self, _iface: &str, _timeout: Duration) -> Result<bool> {
             if self.fail_probe {
                 return Err(Error::DhcpProbe("bind failed".into()));
             }
@@ -661,7 +599,7 @@ mod tests {
         let cfg = Config::default();
         let net = FakeNet::new(false);
         let gw = FakeGw::new(true);
-        let s = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap();
+        let s = apply_with(&cfg, &net, &gw).unwrap();
         assert_eq!(s.mode, Mode::Client);
         assert!(s.foreign_dhcp);
         assert!(!*gw.started.lock().unwrap());
@@ -675,7 +613,7 @@ mod tests {
         let cfg = Config::default();
         let net = FakeNet::new(true);
         let gw = FakeGw::new(false);
-        let s = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap();
+        let s = apply_with(&cfg, &net, &gw).unwrap();
         assert_eq!(s.mode, Mode::Static);
         assert_eq!(s.cidr.as_deref(), Some("192.168.0.252/24"));
         assert_eq!(*net.default_via.lock().unwrap(), Some(cfg.gateway.ip));
@@ -687,7 +625,7 @@ mod tests {
         let cfg = Config::default();
         let net = FakeNet::new(false);
         let gw = FakeGw::new(false);
-        let s = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap();
+        let s = apply_with(&cfg, &net, &gw).unwrap();
         assert_eq!(s.mode, Mode::Gateway);
         assert_eq!(s.cidr.as_deref(), Some("192.168.0.1/24"));
         assert!(*gw.started.lock().unwrap());
@@ -700,24 +638,10 @@ mod tests {
         let net = FakeNet::new(false);
         let mut gw = FakeGw::new(false);
         gw.fail_probe = true;
-        let err = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap_err();
+        let err = apply_with(&cfg, &net, &gw).unwrap_err();
         assert!(matches!(err, Error::DhcpProbe(_)));
         assert!(!*gw.started.lock().unwrap());
         assert!(!*gw.running.lock().unwrap());
-    }
-
-    #[test]
-    fn become_client_stops_dnsmasq_without_probe() {
-        let cfg = Config::default();
-        let net = FakeNet::new(false);
-        let gw = FakeGw::new(false);
-        *gw.running.lock().unwrap() = true;
-        let s = apply_with(&cfg, ProbePolicy::BecomeClient, &net, &gw).unwrap();
-        assert_eq!(s.mode, Mode::Client);
-        assert!(!*gw.running.lock().unwrap());
-        assert!(!*gw.started.lock().unwrap());
-        assert!(*net.dhclient.lock().unwrap());
-        assert_eq!(s.cidr.as_deref(), Some("192.168.0.50/24"));
     }
 
     #[test]
@@ -738,61 +662,24 @@ mod tests {
 
     #[test]
     fn apply_auto_picks_iface_with_carrier() {
-        // eth0 has no carrier (broken/unplugged), eth1 has carrier → apply
-        // must resolve to eth1 and run the gateway mode on it.
-        let cfg = Config::default(); // interface: null → auto
+        let cfg = Config::default();
         let net = FakeNet::with_ifaces(false, &[("eth0", false), ("eth1", true)]);
         let gw = FakeGw::new(false);
-        let s = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap();
+        let s = apply_with(&cfg, &net, &gw).unwrap();
         assert_eq!(s.iface, "eth1");
         assert_eq!(s.mode, Mode::Gateway);
         assert_eq!(s.cidr.as_deref(), Some("192.168.0.1/24"));
+        assert!(net.upped.lock().unwrap().is_empty());
     }
 
     #[test]
     fn teardown_auto_passive_resolves_same_iface() {
-        // After apply picked eth1, teardown (passive) must resolve eth1 too,
-        // without re-running `ip link set up` on all candidates.
         let cfg = Config::default();
         let net = FakeNet::with_ifaces(false, &[("eth0", false), ("eth1", true)]);
         let gw = FakeGw::new(false);
-        let _ = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap();
+        let _ = apply_with(&cfg, &net, &gw).unwrap();
         let s = teardown_with(&cfg, &net, &gw).unwrap();
         assert_eq!(s.iface, "eth1");
-    }
-
-    #[test]
-    fn live_health_matrix() {
-        let net = FakeNet::new(false);
-        let gw = FakeGw::new(false);
-        assert!(!live_health(Mode::Gateway, "", &net, &gw));
-
-        *gw.running.lock().unwrap() = true;
-        net.push_addr("eth0", Ipv4Addr::new(192, 168, 0, 1));
-        assert!(live_health(Mode::Gateway, "eth0", &net, &gw));
-        *gw.running.lock().unwrap() = false;
-        assert!(!live_health(Mode::Gateway, "eth0", &net, &gw));
-
-        let mut down = FakeNet::new(false);
-        down.carrier = false;
-        assert!(live_health(Mode::Gateway, "eth0", &down, &gw));
-
-        *net.dhclient.lock().unwrap() = true;
-        assert!(live_health(Mode::Client, "eth0", &net, &gw));
-        *net.dhclient.lock().unwrap() = false;
-        net.addrs.lock().unwrap().clear();
-        net.push_addr("eth0", Ipv4Addr::new(192, 168, 0, 252));
-        assert!(!live_health(Mode::Client, "eth0", &net, &gw));
-        assert!(live_health(Mode::Static, "eth0", &net, &gw));
-    }
-
-    #[test]
-    fn periodic_ignore_includes_gateway_and_local() {
-        let cfg = Config::default();
-        let v = periodic_ignore_servers(&cfg, Some("192.168.0.1/24"));
-        assert_eq!(v, vec![cfg.gateway.ip]);
-        let v = periodic_ignore_servers(&cfg, Some("192.168.0.50/24"));
-        assert_eq!(v, vec![cfg.gateway.ip, Ipv4Addr::new(192, 168, 0, 50)]);
     }
 
     #[test]
@@ -801,7 +688,7 @@ mod tests {
         let net = FakeNet::with_ifaces(false, &[("eth0", false), ("eth1", true)]);
         net.push_addr("eth0", Ipv4Addr::new(192, 168, 0, 1));
         let gw = FakeGw::new(false);
-        let s = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap();
+        let s = apply_with(&cfg, &net, &gw).unwrap();
         assert_eq!(s.iface, "eth1");
         assert_eq!(s.mode, Mode::Gateway);
         assert_eq!(s.cidr.as_deref(), Some("192.168.0.1/24"));
@@ -816,6 +703,33 @@ mod tests {
     }
 
     #[test]
+    fn isolate_skips_already_down_without_addr() {
+        let cfg = Config::default();
+        let net = FakeNet::with_ifaces(false, &[("eth0", false), ("eth1", true)]);
+        let gw = FakeGw::new(false);
+        let s = apply_with(&cfg, &net, &gw).unwrap();
+        assert_eq!(s.iface, "eth1");
+        assert!(!net.downed.lock().unwrap().contains(&"eth0".to_string()));
+    }
+
+    #[test]
+    fn apply_gateway_keeps_existing_addr() {
+        let cfg = Config::default();
+        let net = FakeNet::with_ifaces(false, &[("eth0", false), ("eth1", true)]);
+        net.push_addr("eth1", Ipv4Addr::new(192, 168, 0, 1));
+        let gw = FakeGw::new(false);
+        let s = apply_with(&cfg, &net, &gw).unwrap();
+        assert_eq!(s.mode, Mode::Gateway);
+        assert_eq!(s.cidr.as_deref(), Some("192.168.0.1/24"));
+        assert!(!net.flushed.lock().unwrap().contains(&"eth1".to_string()));
+        assert_eq!(
+            net.addrs.lock().unwrap().get("eth1"),
+            Some(&vec![Ipv4Addr::new(192, 168, 0, 1)])
+        );
+        assert!(*gw.started.lock().unwrap());
+    }
+
+    #[test]
     fn gateway_ip_local_on_other_iface_is_not_reachable() {
         let cfg = Config::default();
         let net = FakeNet::new(true);
@@ -824,7 +738,7 @@ mod tests {
             .unwrap()
             .push(Ipv4Addr::new(192, 168, 0, 1));
         let gw = FakeGw::new(false);
-        let s = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap();
+        let s = apply_with(&cfg, &net, &gw).unwrap();
         assert_eq!(s.mode, Mode::Gateway);
         assert_eq!(s.cidr.as_deref(), Some("192.168.0.1/24"));
         assert!(*gw.started.lock().unwrap());
@@ -837,7 +751,7 @@ mod tests {
         let mut net = FakeNet::with_ifaces(false, &[("eth0", false), ("eth1", true)]);
         net.fail_list = true;
         let gw = FakeGw::new(false);
-        let s = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap();
+        let s = apply_with(&cfg, &net, &gw).unwrap();
         assert_eq!(s.iface, "eth1");
         assert_eq!(s.mode, Mode::Gateway);
         assert!(net.downed.lock().unwrap().is_empty());

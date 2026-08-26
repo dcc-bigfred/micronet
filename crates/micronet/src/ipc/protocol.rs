@@ -13,6 +13,23 @@ pub enum Request {
     Reconfigure,
 }
 
+/// Daemon-owned liveness (IPC `status` + `micronet check`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Health {
+    pub healthy: bool,
+    pub reason: Option<String>,
+}
+
+impl Health {
+    #[must_use]
+    pub fn ok() -> Self {
+        Self {
+            healthy: true,
+            reason: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
@@ -24,6 +41,10 @@ pub enum Response {
         foreign_dhcp: bool,
         gateway_reachable: bool,
         dnsmasq_running: bool,
+        #[serde(default)]
+        healthy: bool,
+        #[serde(default)]
+        unhealthy_reason: Option<String>,
     },
     Info {
         version: String,
@@ -42,7 +63,7 @@ pub enum Response {
 
 impl Response {
     #[must_use]
-    pub fn from_status(s: &Status) -> Self {
+    pub fn from_status(s: &Status, health: &Health) -> Self {
         Self::Status {
             mode: s.mode,
             iface: s.iface.clone(),
@@ -50,6 +71,8 @@ impl Response {
             foreign_dhcp: s.foreign_dhcp,
             gateway_reachable: s.gateway_reachable,
             dnsmasq_running: s.dnsmasq_running,
+            healthy: health.healthy,
+            unhealthy_reason: health.reason.clone(),
         }
     }
 

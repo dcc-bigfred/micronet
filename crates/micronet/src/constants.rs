@@ -15,18 +15,16 @@ pub const PING_COUNT: &str = "1";
 pub const PING_TIMEOUT_SEC: &str = "2";
 /// Wait for dhclient to assign an address.
 pub const DHCP_CLIENT_WAIT: Duration = Duration::from_secs(5);
-/// Period between gateway-mode DHCPDISCOVER starts (in-flight probes never overlap).
-pub const GATEWAY_FOREIGN_DHCP_INTERVAL: Duration = Duration::from_secs(15);
 /// UDP recv timeout used inside a DHCPDISCOVER wait loop.
 pub const DHCP_PROBE_RECV_TIMEOUT: Duration = Duration::from_millis(250);
 /// SIGTERM grace before SIGKILL for a pidfile-owned process.
 pub const PROCESS_TERM_WAIT: Duration = Duration::from_millis(400);
 /// How often the daemon refreshes live CIDR / process flags.
 pub const STATUS_REFRESH: Duration = Duration::from_secs(3);
-/// Auto-picked iface: wait this long without carrier before re-applying.
-pub const CARRIER_LOST_GRACE: Duration = Duration::from_secs(10);
-/// Minimum gap between carrier-loss re-applies (unplugged hub).
-pub const CARRIER_REAPPLY_BACKOFF: Duration = Duration::from_secs(30);
+/// Default JSON `linkRetrySecs`: wait this long without carrier before re-selecting.
+pub const DEFAULT_LINK_RETRY_SECS: u64 = 15;
+/// Consecutive failed health ticks before IPC reports unhealthy (~9 s at STATUS_REFRESH).
+pub const HEALTH_FAIL_THRESHOLD: u32 = 3;
 
 pub const IP_BIN: &str = "/sbin/ip";
 pub const DHCLIENT_BIN: &str = "/sbin/dhclient";

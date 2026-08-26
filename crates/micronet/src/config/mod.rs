@@ -8,8 +8,8 @@ use ipnet::Ipv4Net;
 use serde::{Deserialize, Serialize};
 
 use crate::constants::{
-    DEFAULT_PROBE_TIMEOUT_SECS, DEFAULT_RANGE_END, DEFAULT_RANGE_START, DEFAULT_STATIC_HOST,
-    DEFAULT_STICKY, MAX_DNS_NAME_LEN, MAX_DNS_RECORDS, REQUIRED_PREFIX,
+    DEFAULT_LINK_RETRY_SECS, DEFAULT_PROBE_TIMEOUT_SECS, DEFAULT_RANGE_END, DEFAULT_RANGE_START,
+    DEFAULT_STATIC_HOST, DEFAULT_STICKY, MAX_DNS_NAME_LEN, MAX_DNS_RECORDS, REQUIRED_PREFIX,
 };
 use crate::datadir;
 use crate::error::{Error, Result};
@@ -168,6 +168,9 @@ pub struct Config {
     pub dhcp: DhcpConfig,
     #[serde(default = "default_probe_timeout")]
     pub probe_timeout_secs: u64,
+    /// Seconds without carrier on the chosen iface before a full re-select.
+    #[serde(default = "default_link_retry")]
+    pub link_retry_secs: u64,
     /// Static unicast names. Served only while mode is `gateway`.
     #[serde(default, skip_serializing_if = "DnsConfig::is_default")]
     pub dns: DnsConfig,
@@ -177,6 +180,10 @@ fn default_probe_timeout() -> u64 {
     DEFAULT_PROBE_TIMEOUT_SECS
 }
 
+fn default_link_retry() -> u64 {
+    DEFAULT_LINK_RETRY_SECS
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -184,6 +191,7 @@ impl Default for Config {
             gateway: GatewayConfig::default(),
             dhcp: DhcpConfig::default(),
             probe_timeout_secs: default_probe_timeout(),
+            link_retry_secs: default_link_retry(),
             dns: DnsConfig::default(),
         }
     }
@@ -224,6 +232,9 @@ impl Config {
         parse_sticky(&self.dhcp.sticky)?;
         if self.probe_timeout_secs == 0 {
             return Err(Error::Config("probeTimeoutSecs must be > 0".into()));
+        }
+        if self.link_retry_secs == 0 {
+            return Err(Error::Config("linkRetrySecs must be > 0".into()));
         }
         if let Some(name) = &self.interface {
             if name.is_empty() {
@@ -436,6 +447,15 @@ mod tests {
             ..Config::default()
         };
         c.validate().unwrap();
+    }
+
+    #[test]
+    fn link_retry_zero_rejected() {
+        let c = Config {
+            link_retry_secs: 0,
+            ..Config::default()
+        };
+        assert!(c.validate().is_err());
     }
 
     #[test]

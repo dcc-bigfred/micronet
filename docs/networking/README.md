@@ -14,23 +14,23 @@ For a non-technical operator. Goal: low-latency WiFi for throttles (`bigfred2`, 
 - Omada **EAP610/613 × 3** (access points), **wired** to the switch (this is not Omada Mesh)
 - **Switch PoE TL-SF1006P** (ports 1–4 PoE+, 5–6 plain) — **required**. APs take PoE from this switch only
 - **Omada OC200** — **required** for Fast Roaming (802.11k/v). The controller must stay powered; if it stops, Fast Roaming stops. Same SSID on all APs still allows *basic* client-driven roaming without a controller, but not steered handovers
-- Optional: **any DHCP router** on a spare switch port (not as PoE for the Omadas). Then BigFred yields and does **not** serve DHCP
+- Optional: **any DHCP router** on a spare switch port (not as PoE for the Omadas). Then BigFred joins as client/static and does **not** serve DHCP
 - Ethernet cables, PSUs, 3 stands at **2 m**, laptop/phone for setup, optional UPS
 
 ## How BigFred networking works
 
 On boot, the **`micronet` daemon** checks every cable Ethernet, brings
-up the first one **with a cable** (wait up to 5 s), and **downs** the
-rest. Then:
+up the first one **with a cable** (wait up to 5 s only if none already
+show a link), and **downs** the rest. Then:
 
-1. Brings the chosen interface up (no address).
+1. Brings the chosen interface up if it was down (no extra ethtool if it was already up).
 2. Sends **DHCPDISCOVER** and waits for a **DHCPOFFER** (no REQUEST).
 3. **Offer** → mode **`client`**: `dhclient`, no dnsmasq, no `gateway.ip` on the Pi.
-4. **No offer** → temporarily `.252` in the configured subnet, then `ping gateway.ip`:
+4. **No offer** → temporarily `.252` in the configured subnet (only if the iface has no address yet), then `ping gateway.ip`:
    - ping OK → mode **`static`**: stay on `.252`, default route via `gateway.ip`, no dnsmasq
    - ping fail → mode **`gateway`**: take `gateway.ip` (image seed: **`192.168.0.1/24`**), start **dnsmasq** (pool `.50–.200`, sticky lease **7d**, router/DNS = BigFred). **No default route.** Optional `dns.records` in `$DATA_DIR/etc/micronet.json` become unicast names (e.g. `bigfred.lan`) pointing at `gateway.ip`. In `client` / `static` those names are not served — use mDNS `bigfred.local`.
 
-If a router is plugged into the switch or boots **after** BigFred already became gateway, micronet notices the foreign DHCP (periodic probe) and **yields**: stops dnsmasq and runs `dhclient`. Power the router first when you want it to own DHCP.
+After that, micronet **holds** the chosen interface. Unplug the cable and it waits `linkRetrySecs` (default 15 s) before picking again. Plug a router into the switch **after** BigFred is already gateway: it will **not** notice until you unplug/replug the hub cable (or `micronet reconfigure`). Power the router first when you want it to own DHCP.
 
 There is no Omada detection and no per-MAC `dhcp-host=` reservations. Stickiness is the dnsmasq leasefile + `7d`.
 

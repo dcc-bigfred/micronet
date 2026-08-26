@@ -77,17 +77,12 @@ pub fn decode_matching_offer(buf: &[u8], xid: u32, chaddr: &[u8; 6]) -> Option<O
     Some(OfferView { server_id })
 }
 
-/// Broadcast DHCPDISCOVER on `iface`; true if a *foreign* DHCPOFFER arrives.
+/// Broadcast DHCPDISCOVER on `iface`; true if a DHCPOFFER arrives.
 ///
-/// `ignore_servers` are treated as self (our gateway.ip / local inet) and skipped.
-/// Bind/send/`SO_BINDTODEVICE` failures are errors (fail closed). Timeout with only
-/// self/invalid packets is `Ok(false)`.
-pub fn probe_foreign_dhcp(
-    iface: &str,
-    mac: &[u8; 6],
-    timeout: Duration,
-    ignore_servers: &[Ipv4Addr],
-) -> Result<bool> {
+/// Own dnsmasq is stopped before this probe, so any matching offer is foreign.
+/// Bind/send/`SO_BINDTODEVICE` failures are errors (fail closed). Timeout
+/// with no valid offer is `Ok(false)`.
+pub fn probe_foreign_dhcp(iface: &str, mac: &[u8; 6], timeout: Duration) -> Result<bool> {
     let xid = xid_now();
     let pkt = encode_discover(mac, xid)?;
     let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
@@ -115,9 +110,6 @@ pub fn probe_foreign_dhcp(
         match udp.recv_from(&mut buf) {
             Ok((n, src)) => {
                 if let Some(offer) = decode_matching_offer(&buf[..n], xid, mac) {
-                    if is_self_offer(offer.server_id, udp_src_v4(src), ignore_servers) {
-                        continue;
-                    }
                     if offer_identity(offer.server_id, udp_src_v4(src)).is_some() {
                         return Ok(true);
                     }
@@ -150,22 +142,6 @@ fn offer_identity(server_id: Option<Ipv4Addr>, udp_src: Ipv4Addr) -> Option<Ipv4
         return Some(udp_src);
     }
     None
-}
-
-fn is_self_offer(
-    server_id: Option<Ipv4Addr>,
-    udp_src: Ipv4Addr,
-    ignore_servers: &[Ipv4Addr],
-) -> bool {
-    if ignore_servers.is_empty() {
-        return false;
-    }
-    if let Some(id) = server_id {
-        if ignore_servers.contains(&id) {
-            return true;
-        }
-    }
-    ignore_servers.contains(&udp_src)
 }
 
 fn xid_now() -> u32 {
@@ -306,21 +282,14 @@ mod tests {
     }
 
     #[test]
-    fn self_server_id_is_ignored_foreign_is_not() {
-        let self_id = Ipv4Addr::new(10, 0, 10, 1);
+    fn offer_identity_prefers_server_id() {
         let foreign = Ipv4Addr::new(8, 8, 8, 8);
-        let ignore = [self_id];
-        assert!(is_self_offer(Some(self_id), Ipv4Addr::UNSPECIFIED, &ignore));
-        assert!(!is_self_offer(
-            Some(foreign),
-            Ipv4Addr::UNSPECIFIED,
-            &ignore
-        ));
-        assert!(is_self_offer(None, self_id, &ignore));
-        assert!(!is_self_offer(None, foreign, &ignore));
-        assert!(!is_self_offer(Some(self_id), self_id, &[]));
         assert!(offer_identity(None, Ipv4Addr::UNSPECIFIED).is_none());
         assert_eq!(offer_identity(None, foreign), Some(foreign));
+        assert_eq!(
+            offer_identity(Some(foreign), Ipv4Addr::UNSPECIFIED),
+            Some(foreign)
+        );
     }
 
     #[test]

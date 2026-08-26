@@ -58,6 +58,8 @@ pub trait NetOps {
     fn iface_has_addr(&self, iface: &str, ip: Ipv4Addr) -> bool;
     fn iface_ipv4_cidr(&self, iface: &str) -> Option<String>;
     fn carrier_up(&self, iface: &str) -> bool;
+    /// Admin-up (`IFF_UP`). Distinct from [`NetOps::carrier_up`] (cable / LOWER_UP).
+    fn link_is_up(&self, iface: &str) -> bool;
     /// `ip link set down` (isolate non-selected Ethernet).
     fn set_down(&self, iface: &str) -> Result<()>;
     /// True if `ip` is configured as an inet address on any interface.
@@ -118,6 +120,9 @@ impl NetOps for LiveNet {
     }
 
     fn bring_up(&self, iface: &str) -> Result<()> {
+        if self.link_is_up(iface) {
+            return Ok(());
+        }
         run_cmd(IP_BIN, &["link", "set", "dev", iface, "up"])?;
         apply_phy_tweaks(iface);
         Ok(())
@@ -150,6 +155,10 @@ impl NetOps for LiveNet {
 
     fn carrier_up(&self, iface: &str) -> bool {
         carrier_up(iface)
+    }
+
+    fn link_is_up(&self, iface: &str) -> bool {
+        link_is_up_sys(&self.sys_class_net, iface)
     }
 
     fn set_down(&self, iface: &str) -> Result<()> {
@@ -227,9 +236,10 @@ fn cidr_ip(cidr: &str) -> Ipv4Addr {
 }
 
 /// Pick a physical Ethernet: `null` / omitted / `"auto"` → first with carrier
-/// (after a best-effort `ip link set up`, waiting up to 5 s); no carrier →
-/// first sorted name. Any other string is an explicit device and must pass
-/// the physical filter.
+/// (without bringing up ifaces that already show carrier; otherwise a
+/// best-effort `ip link set up` on down candidates, waiting up to 5 s);
+/// no carrier → first sorted name. Any other string is an explicit device
+/// and must pass the physical filter.
 pub fn resolve_iface(sys_class_net: &Path, configured: Option<&str>) -> Result<String> {
     resolve_iface_with(sys_class_net, configured, LinkBringUp::Live)
 }
@@ -252,16 +262,24 @@ fn resolve_iface_with(
 
 /// First physical Ethernet with sysfs `carrier=1`, else the first sorted name.
 ///
-/// `bring_up=Live` admin-ups each candidate first (sysfs `carrier` is unreadable
-/// while the iface is down) and polls for ~2 s to cover PHY auto-negotiation.
-/// `SysfsOnly` (tests) does a single read — the fake sysfs already has `carrier`.
+/// `bring_up=Live` first reads carrier **without** touching links. Only if
+/// none have carrier does it admin-up ifaces that are still down and poll
+/// for ~5 s (PHY/USB auto-negotiation). `SysfsOnly` (tests) does a single
+/// read — the fake sysfs already has `carrier`.
 fn resolve_auto(sys_class_net: &Path, bring_up: LinkBringUp) -> Result<String> {
     let names = list_physical_ethernet(sys_class_net)?;
     let Some(fallback) = names.first().cloned() else {
         return Err(Error::NoEthernet);
     };
+    if let Some(name) = names.iter().find(|n| carrier_up_sys(sys_class_net, n)) {
+        log::info!("auto interface {name} (carrier)");
+        return Ok(name.clone());
+    }
     if bring_up == LinkBringUp::Live {
         for name in &names {
+            if link_is_up_sys(sys_class_net, name) {
+                continue;
+            }
             let _ = run_cmd(IP_BIN, &["link", "set", "dev", name, "up"]);
         }
         let deadline = Instant::now() + Duration::from_millis(AUTO_CARRIER_WAIT_MS);
@@ -280,11 +298,7 @@ fn resolve_auto(sys_class_net: &Path, bring_up: LinkBringUp) -> Result<String> {
         );
         return Ok(fallback);
     }
-    // `None` (teardown) and `SysfsOnly` (tests): single read, no wait.
-    if let Some(name) = names.iter().find(|n| carrier_up_sys(sys_class_net, n)) {
-        log::info!("auto interface {name} (carrier)");
-        return Ok(name.clone());
-    }
+    // `None` (teardown) and `SysfsOnly` (tests): already did a single read.
     log::info!("auto interface {fallback} (no carrier, first physical)");
     Ok(fallback)
 }
@@ -295,6 +309,18 @@ fn resolve_auto(sys_class_net: &Path, bring_up: LinkBringUp) -> Result<String> {
 fn carrier_up_sys(sys_class_net: &Path, name: &str) -> bool {
     let path = sys_class_net.join(name).join("carrier");
     fs::read_to_string(path).is_ok_and(|s| s.trim() == "1")
+}
+
+/// Linux `IFF_UP` in sysfs `flags` (hex, e.g. `0x1003`).
+const IFF_UP: u32 = 0x1;
+
+#[must_use]
+fn link_is_up_sys(sys_class_net: &Path, name: &str) -> bool {
+    let path = sys_class_net.join(name).join("flags");
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    u32::from_str_radix(text.trim().trim_start_matches("0x"), 16).is_ok_and(|val| val & IFF_UP != 0)
 }
 
 /// Physical Ethernet: `ARPHRD_ETHER`, not virtual, not wifi, not loopback, not bridge.
@@ -581,6 +607,22 @@ mod tests {
         fs::create_dir_all(&sys).unwrap();
         let err = resolve_iface_with(&sys, None, LinkBringUp::SysfsOnly).unwrap_err();
         assert!(matches!(err, Error::NoEthernet));
+    }
+
+    #[test]
+    fn link_is_up_reads_iff_up() {
+        let dir = tempdir().unwrap();
+        let sys = dir.path().join("net");
+        physical_eth(&sys, "eth0", "0\n");
+        physical_eth(&sys, "eth1", "1\n");
+        write(&sys.join("eth0").join("flags"), "0x1002\n");
+        write(&sys.join("eth1").join("flags"), "0x1003\n");
+        assert!(!link_is_up_sys(&sys, "eth0"));
+        assert!(link_is_up_sys(&sys, "eth1"));
+        assert_eq!(
+            resolve_iface_with(&sys, None, LinkBringUp::SysfsOnly).unwrap(),
+            "eth1"
+        );
     }
 
     #[test]

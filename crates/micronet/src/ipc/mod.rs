@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::thread;
@@ -17,7 +17,7 @@ use crate::error::{Error, Result};
 use crate::version;
 
 pub mod protocol;
-pub use protocol::{Request, Response};
+pub use protocol::{Health, Request, Response};
 
 /// Default `$DATA_DIR/run/micronet.sock`.
 #[must_use]
@@ -29,6 +29,8 @@ pub fn default_socket() -> PathBuf {
 pub struct Shared {
     pub config: RwLock<Config>,
     pub status: RwLock<Status>,
+    pub applying: AtomicBool,
+    pub health: RwLock<Health>,
 }
 
 impl Shared {
@@ -37,6 +39,8 @@ impl Shared {
         Arc::new(Self {
             config: RwLock::new(config),
             status: RwLock::new(status),
+            applying: AtomicBool::new(false),
+            health: RwLock::new(Health::ok()),
         })
     }
 }
@@ -188,9 +192,9 @@ fn handle_conn(mut stream: UnixStream, shared: &Shared, events: &Sender<IpcEvent
         }
     };
     let resp = match req {
-        Request::Status => match shared.status.read() {
-            Ok(s) => Response::from_status(&s),
-            Err(_) => Response::Error {
+        Request::Status => match (shared.status.read(), shared.health.read()) {
+            (Ok(s), Ok(h)) => Response::from_status(&s, &h),
+            _ => Response::Error {
                 message: "status lock poisoned".into(),
             },
         },

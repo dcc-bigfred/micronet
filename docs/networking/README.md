@@ -19,7 +19,7 @@ For a non-technical operator. Goal: low-latency WiFi for throttles (`bigfred2`, 
 
 ## How BigFred networking works
 
-On boot, the **`micronet` daemon** (`eth0` / first physical Ethernet):
+On boot, the **`micronet` daemon** (first physical Ethernet **with a cable**, else first Ethernet):
 
 1. Brings the interface up (no address).
 2. Sends **DHCPDISCOVER** and waits for a **DHCPOFFER** (no REQUEST).

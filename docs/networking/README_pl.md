@@ -19,7 +19,7 @@ Dla mało technicznego operatora. Cel: WiFi o niskim opóźnieniu dla pilotów (
 
 ## Jak działa sieć na BigFredzie
 
-Po starcie daemon **`micronet`** (pierwszy fizyczny Ethernet):
+Po starcie daemon **`micronet`** (pierwszy fizyczny Ethernet **z kablem**, w przeciwnym razie pierwszy Ethernet):
 
 1. Podnosi interfejs (bez adresu).
 2. Wysyła **DHCPDISCOVER** i czeka na **DHCPOFFER** (bez REQUEST).

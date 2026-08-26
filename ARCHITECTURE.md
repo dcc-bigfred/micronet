@@ -25,7 +25,10 @@ installs the connected route. This task does **not** enable
    bool ladder. dnsmasq runs only in `gateway`.
 4. **Physical Ethernet only.** `ARPHRD_ETHER`, no `wireless`, sysfs
    realpath without `/devices/virtual/`, no bridge master, no
-   `IFF_LOOPBACK`. Configured `interface` MUST pass the same filter.
+   `IFF_LOOPBACK`. `interface` `null` / omitted / `"auto"` selects the
+   first candidate with sysfs `carrier=1` (after a best-effort
+   `ip link set up` on each); no carrier → first sorted name. Any other
+   configured name MUST pass the same filter.
 5. **No NAT / `ip_forward`.** Isolated event LAN. Gateway mode has **no**
    default route. Static mode **does** `default via gateway.ip`.
 6. **dnsmasq** is DHCP+DNS for the event pool only (`listen-address` =
@@ -105,7 +108,7 @@ ARCHITECTURE.md
 | Dir | Job |
 |---|---|
 | `config` | camelCase JSON, validate, load_or_create (example **without** `socket`), inotify debounce ~300 ms |
-| `net` | iface filter, `ip` / `ping` / pidfile-owned `dhclient`, DHCPDISCOVER encode/probe, best-effort `ethtool` EEE/TSO/GSO/coalesce off after link up |
+| `net` | iface filter + carrier-based auto pick, `ip` / `ping` / pidfile-owned `dhclient`, DHCPDISCOVER encode/probe, best-effort `ethtool` EEE/TSO/GSO/coalesce off after link up |
 | `dhcp` | render `dnsmasq.conf`, start / SIGHUP / restart / stop (pidfile only) |
 | `pidfile` | TERM/KILL one process; never `killall` |
 | `apply` | probe policy, mode apply, teardown, live health |
@@ -118,6 +121,10 @@ ARCHITECTURE.md
 
 ## 6. Mode selection
 
+0. Resolve the iface: `null` / omitted / `"auto"` → first physical Ethernet
+   with carrier (candidates are admin-up first so sysfs `carrier` is
+   readable); none have carrier → first sorted name. An explicit name
+   skips this pick.
 1. Link up, no address; stop **our** leftover `dhclient` (per-iface pidfile).
    After `ip link set up`, best-effort `ethtool --set-eee … eee off`,
    `ethtool -K … tso off gso off`, and `ethtool -C … rx-usecs 0 tx-usecs 0`

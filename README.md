@@ -13,6 +13,7 @@ DHCPDISCOVER probe and a ping of `gateway.ip`.
 - dnsmasq only in `gateway` (pool `.50–.200`, sticky MAC→IP lease **7d**, `option:router` / `dns-server`)
 - Optional `dns` section in JSON: static unicast A records (`host-record=`) served only in `gateway`
 - Physical Ethernet only (not `lo`, bridge, virtual, Wi-Fi)
+- Default iface pick: first physical Ethernet **with carrier** (`interface` null / omitted / `"auto"`); no carrier → first sorted name; an explicit name pins the device
 - JSON camelCase under `$DATA_DIR/etc/micronet.json` (no hardcoded `/data/...`); invalid reload keeps the previous config
 - Unix socket `$DATA_DIR/run/micronet.sock` (4-byte LE length + JSON)
 - `std::thread` (no tokio); musl arm64

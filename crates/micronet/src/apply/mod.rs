@@ -200,7 +200,9 @@ pub fn apply_with<N: NetOps, G: GatewayCtl>(
 /// Stop managed dnsmasq/dhclient and flush the resolved iface.
 pub fn teardown_with<N: NetOps, G: GatewayCtl>(cfg: &Config, net: &N, gw: &G) -> Result<Status> {
     cfg.validate()?;
-    let iface = net.resolve_iface(cfg.interface.as_deref())?;
+    // Passive: apply already admin-upped the iface; don't `ip link set up`
+    // all candidates during teardown.
+    let iface = net.resolve_iface_passive(cfg.interface.as_deref())?;
     gw.dhcp_stop()?;
     net.stop_dhclient(&iface)?;
     net.flush_addr(&iface)?;
@@ -355,6 +357,10 @@ mod tests {
         dhclient: Mutex<bool>,
         default_via: Mutex<Option<Ipv4Addr>>,
         carrier: bool,
+        // For auto-pick tests: ordered iface names with per-iface carrier.
+        // Empty → single-iface mode (`eth0`, `carrier`).
+        ifaces: Vec<String>,
+        carriers: std::collections::HashMap<String, bool>,
     }
 
     impl FakeNet {
@@ -365,22 +371,61 @@ mod tests {
                 dhclient: Mutex::new(false),
                 default_via: Mutex::new(None),
                 carrier: true,
+                ifaces: Vec::new(),
+                carriers: std::collections::HashMap::new(),
+            }
+        }
+
+        /// Multi-iface mode: `auto` picks the first iface with carrier=true.
+        fn with_ifaces(ping_ok: bool, ifaces: &[(&str, bool)]) -> Self {
+            let mut carriers = std::collections::HashMap::new();
+            for (n, c) in ifaces {
+                carriers.insert((*n).to_string(), *c);
+            }
+            Self {
+                ping_ok,
+                addrs: Mutex::new(Vec::new()),
+                dhclient: Mutex::new(false),
+                default_via: Mutex::new(None),
+                carrier: true,
+                ifaces: ifaces.iter().map(|(n, _)| (*n).to_string()).collect(),
+                carriers,
             }
         }
     }
 
     impl NetOps for FakeNet {
         fn list_ethernet(&self) -> Result<Vec<String>> {
-            Ok(vec!["eth0".into()])
+            if self.ifaces.is_empty() {
+                Ok(vec!["eth0".into()])
+            } else {
+                Ok(self.ifaces.clone())
+            }
         }
         fn is_physical_ethernet(&self, name: &str) -> bool {
-            name == "eth0"
+            self.ifaces.is_empty() && name == "eth0" || self.ifaces.iter().any(|n| n == name)
         }
         fn resolve_iface(&self, configured: Option<&str>) -> Result<String> {
             match configured {
-                None => Ok("eth0".into()),
-                Some("eth0") => Ok("eth0".into()),
-                Some(n) => Err(Error::NotEthernet(n.into())),
+                None | Some("auto") => {
+                    if self.ifaces.is_empty() {
+                        return Ok("eth0".into());
+                    }
+                    // First with carrier, else first sorted.
+                    let pick = self
+                        .ifaces
+                        .iter()
+                        .find(|n| self.carriers.get(*n).copied().unwrap_or(false))
+                        .cloned()
+                        .or_else(|| self.ifaces.first().cloned());
+                    pick.ok_or(Error::NoEthernet)
+                }
+                Some(name) => {
+                    if !self.is_physical_ethernet(name) {
+                        return Err(Error::NotEthernet(name.into()));
+                    }
+                    Ok(name.into())
+                }
             }
         }
         fn bring_up(&self, _iface: &str) -> Result<()> {
@@ -585,6 +630,31 @@ mod tests {
         assert!(!*gw.running.lock().unwrap());
         assert!(!*net.dhclient.lock().unwrap());
         assert!(net.addrs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn apply_auto_picks_iface_with_carrier() {
+        // eth0 has no carrier (broken/unplugged), eth1 has carrier → apply
+        // must resolve to eth1 and run the gateway mode on it.
+        let cfg = Config::default(); // interface: null → auto
+        let net = FakeNet::with_ifaces(false, &[("eth0", false), ("eth1", true)]);
+        let gw = FakeGw::new(false);
+        let s = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap();
+        assert_eq!(s.iface, "eth1");
+        assert_eq!(s.mode, Mode::Gateway);
+        assert_eq!(s.cidr.as_deref(), Some("192.168.0.1/24"));
+    }
+
+    #[test]
+    fn teardown_auto_passive_resolves_same_iface() {
+        // After apply picked eth1, teardown (passive) must resolve eth1 too,
+        // without re-running `ip link set up` on all candidates.
+        let cfg = Config::default();
+        let net = FakeNet::with_ifaces(false, &[("eth0", false), ("eth1", true)]);
+        let gw = FakeGw::new(false);
+        let _ = apply_with(&cfg, ProbePolicy::Full, &net, &gw).unwrap();
+        let s = teardown_with(&cfg, &net, &gw).unwrap();
+        assert_eq!(s.iface, "eth1");
     }
 
     #[test]

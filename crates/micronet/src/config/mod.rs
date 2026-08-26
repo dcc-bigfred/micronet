@@ -157,7 +157,9 @@ pub struct DnsRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
-    /// Physical Ethernet name. `null` / omitted → first physical Ethernet.
+    /// Physical Ethernet name. `null` / omitted / `"auto"` → first physical
+    /// Ethernet with carrier (else first sorted name). Any other string is
+    /// an explicit device.
     #[serde(default)]
     pub interface: Option<String>,
     #[serde(default)]
@@ -425,6 +427,15 @@ mod tests {
             ..Config::default()
         };
         assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn interface_auto_validates() {
+        let c = Config {
+            interface: Some("auto".into()),
+            ..Config::default()
+        };
+        c.validate().unwrap();
     }
 
     #[test]

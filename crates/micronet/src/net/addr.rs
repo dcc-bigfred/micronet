@@ -49,6 +49,18 @@ pub fn cidr_ipv4(cidr: &str) -> Option<Ipv4Addr> {
     cidr.split('/').next().and_then(|s| s.parse().ok())
 }
 
+/// True when `ip -4 -o addr show` stdout contains `ip` as a configured inet.
+#[must_use]
+pub fn stdout_has_ipv4(ip_stdout: &str, ip: Ipv4Addr) -> bool {
+    let prefix = format!("{ip}/");
+    ip_stdout.lines().any(|line| {
+        line.split("inet ")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .is_some_and(|token| token.starts_with(&prefix))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -80,5 +92,17 @@ mod tests {
 ";
         assert_eq!(parse_first_inet_cidr(two).as_deref(), Some("10.0.10.1/24"));
         assert!(parse_first_inet_cidr("").is_none());
+    }
+
+    #[test]
+    fn stdout_has_ipv4_exact_slash() {
+        let out = "\
+2: eth0    inet 192.168.0.1/24 brd 192.168.0.255 scope global eth0
+4: eth1    inet 192.168.0.252/24 brd 192.168.0.255 scope global eth1
+";
+        assert!(stdout_has_ipv4(out, Ipv4Addr::new(192, 168, 0, 1)));
+        assert!(stdout_has_ipv4(out, Ipv4Addr::new(192, 168, 0, 252)));
+        assert!(!stdout_has_ipv4(out, Ipv4Addr::new(192, 168, 0, 10)));
+        assert!(!stdout_has_ipv4("", Ipv4Addr::new(192, 168, 0, 1)));
     }
 }

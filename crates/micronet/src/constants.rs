@@ -23,6 +23,10 @@ pub const DHCP_PROBE_RECV_TIMEOUT: Duration = Duration::from_millis(250);
 pub const PROCESS_TERM_WAIT: Duration = Duration::from_millis(400);
 /// How often the daemon refreshes live CIDR / process flags.
 pub const STATUS_REFRESH: Duration = Duration::from_secs(3);
+/// Auto-picked iface: wait this long without carrier before re-applying.
+pub const CARRIER_LOST_GRACE: Duration = Duration::from_secs(10);
+/// Minimum gap between carrier-loss re-applies (unplugged hub).
+pub const CARRIER_REAPPLY_BACKOFF: Duration = Duration::from_secs(30);
 
 pub const IP_BIN: &str = "/sbin/ip";
 pub const DHCLIENT_BIN: &str = "/sbin/dhclient";

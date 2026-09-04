@@ -155,6 +155,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "dcc-daemon"
+version = "0.1.0"
+source = "git+https://github.com/dcc-bigfred/rust-commons.git?rev=bdc4155f124f82ce59c9a8801b4952be8e06f4a2#bdc4155f124f82ce59c9a8801b4952be8e06f4a2"
+dependencies = [
+ "log",
+ "nix",
+ "notify",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "defmt"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -259,7 +273,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -633,12 +647,12 @@ name = "micronet"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "dcc-daemon",
  "dhcproto",
  "env_logger",
  "ipnet",
  "log",
  "nix",
- "notify",
  "serde",
  "serde_json",
  "signal-hook",
@@ -849,7 +863,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1012,7 +1026,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1202,7 +1216,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

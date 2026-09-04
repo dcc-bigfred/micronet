@@ -6,7 +6,7 @@ RUSTUP_TOOLCHAIN ?= stable
 export RUSTUP_TOOLCHAIN
 
 .PHONY: all build release release-musl check test test-release-assertions \
-	clean fmt clippy
+	clean fmt clippy deps-update
 
 all: build
 
@@ -42,6 +42,10 @@ fmt:
 
 clippy:
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
+
+# Refresh git crates (dcc-daemon) and rewrite Cargo.lock. Commit the lockfile afterwards.
+deps-update:
+	$(CARGO) update -p dcc-daemon
 
 clean:
 	$(CARGO) clean

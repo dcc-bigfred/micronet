@@ -5,18 +5,18 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
-use dcc_daemon::config::{spawn_signal, PathFilter, WatchSpec};
+use bigfred_shared_daemon::config::{spawn_signal, PathFilter, WatchSpec};
 
 use crate::constants::CONFIG_DEBOUNCE;
 use crate::error::{Error, Result};
 
 /// Signal that the configuration file may have changed.
-pub type ReloadSignal = dcc_daemon::config::Reload;
+pub type ReloadSignal = bigfred_shared_daemon::config::Reload;
 
 /// Filter path events relevant to the watched config basename.
 #[must_use]
 pub fn is_relevant_path(path: &Path, config_name: &str) -> bool {
-    dcc_daemon::config::is_relevant_path(path, &PathFilter::Basename(config_name.to_string()))
+    bigfred_shared_daemon::config::is_relevant_path(path, &PathFilter::Basename(config_name.to_string()))
 }
 
 /// Spawn an inotify watcher thread. Returns a receiver of debounce-coalesced reload signals.

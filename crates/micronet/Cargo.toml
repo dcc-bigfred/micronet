@@ -18,7 +18,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 # Git HTTPS from rust-commons (`main`; bump with `make deps-update`).
-dcc-daemon = { git = "https://github.com/dcc-bigfred/rust-commons.git", branch = "main" }
+bigfred-shared-daemon = { git = "https://github.com/dcc-bigfred/rust-commons.git", branch = "main" }
 dhcproto = "0.12"
 env_logger = "0.11"
 ipnet = { version = "2", features = ["serde"] }

@@ -7,7 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 
-use dcc_daemon::ipc::{
+use bigfred_shared_daemon::ipc::{
     read_frame_bytes, write_frame_with_limit, AcceptPolicy, Auth, BindError, BindOptions, Command,
     Connection, ErrorHandler, IpcError, RejectReason, Router, SessionMode,
 };
@@ -68,7 +68,7 @@ pub fn read_frame_from(reader: &mut impl Read) -> Result<Vec<u8>> {
     read_frame_bytes(reader, MAX_IPC_FRAME_BYTES).map_err(map_frame)
 }
 
-fn map_frame(e: dcc_daemon::ipc::FrameError) -> Error {
+fn map_frame(e: bigfred_shared_daemon::ipc::FrameError) -> Error {
     Error::Ipc(e.to_string())
 }
 
@@ -173,7 +173,7 @@ pub fn serve(path: &Path, shared: Arc<Shared>, events: Sender<IpcEvent>) -> Resu
         .map_err(|e| Error::Other(e.to_string()))?;
 
     let state = Arc::new(IpcState { shared, events });
-    dcc_daemon::ipc::serve_background(
+    bigfred_shared_daemon::ipc::serve_background(
         BindOptions {
             path: path.to_path_buf(),
             mode: 0o600,

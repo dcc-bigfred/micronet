@@ -79,6 +79,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "bigfred-shared-daemon"
+version = "0.1.0"
+source = "git+https://github.com/dcc-bigfred/rust-commons.git?branch=main#5f5053ef9316139c7cde500e6e9e85a70dbbbd09"
+dependencies = [
+ "log",
+ "nix",
+ "notify",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -153,20 +167,6 @@ name = "data-encoding"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
-
-[[package]]
-name = "dcc-daemon"
-version = "0.1.0"
-source = "git+https://github.com/dcc-bigfred/rust-commons.git?branch=main#f740cf1b95037ab662697a713cbde8c2c05c3d9e"
-dependencies = [
- "log",
- "nix",
- "notify",
- "serde",
- "serde_json",
- "signal-hook",
- "thiserror 2.0.19",
-]
 
 [[package]]
 name = "defmt"
@@ -273,7 +273,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -646,8 +646,8 @@ dependencies = [
 name = "micronet"
 version = "0.1.0"
 dependencies = [
+ "bigfred-shared-daemon",
  "clap",
- "dcc-daemon",
  "dhcproto",
  "env_logger",
  "ipnet",
@@ -863,7 +863,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1026,7 +1026,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1216,7 +1216,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

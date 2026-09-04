@@ -381,8 +381,8 @@ pub fn parse_sticky(s: &str) -> Result<u64> {
 
 /// Load JSON; missing file → defaults written as an example (no `socket` field).
 pub fn load_or_create(path: &Path) -> Result<Config> {
-    use dcc_daemon::config::Load;
-    let cfg = dcc_daemon::config::JsonFile::<Config>::new(path)
+    use bigfred_shared_daemon::config::Load;
+    let cfg = bigfred_shared_daemon::config::JsonFile::<Config>::new(path)
         .create_default()
         .load()
         .map_err(map_config)?;
@@ -392,8 +392,8 @@ pub fn load_or_create(path: &Path) -> Result<Config> {
 
 /// Load existing JSON; missing → defaults in memory (do not write).
 pub fn load(path: &Path) -> Result<Config> {
-    use dcc_daemon::config::Load;
-    let cfg = dcc_daemon::config::JsonFile::<Config>::new(path)
+    use bigfred_shared_daemon::config::Load;
+    let cfg = bigfred_shared_daemon::config::JsonFile::<Config>::new(path)
         .missing_defaults()
         .load()
         .map_err(map_config)?;
@@ -401,13 +401,13 @@ pub fn load(path: &Path) -> Result<Config> {
     Ok(cfg)
 }
 
-fn map_config(e: dcc_daemon::config::ConfigError) -> Error {
+fn map_config(e: bigfred_shared_daemon::config::ConfigError) -> Error {
     match e {
-        dcc_daemon::config::ConfigError::Io { path, source } => {
+        bigfred_shared_daemon::config::ConfigError::Io { path, source } => {
             Error::io_at(PathBuf::from(path), source)
         }
-        dcc_daemon::config::ConfigError::Json(j) => Error::Json(j),
-        dcc_daemon::config::ConfigError::Other(s) => Error::Other(s),
+        bigfred_shared_daemon::config::ConfigError::Json(j) => Error::Json(j),
+        bigfred_shared_daemon::config::ConfigError::Other(s) => Error::Other(s),
     }
 }
 

@@ -1,13 +1,17 @@
 //! Unix control socket: 4-byte LE length + JSON.
 
 use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
-use std::thread;
+
+use bigfred_shared_daemon::ipc::{
+    read_frame_bytes, write_frame_with_limit, AcceptPolicy, Auth, BindError, BindOptions, Command,
+    Connection, ErrorHandler, IpcError, RejectReason, Router, SessionMode,
+};
+use serde_json::Value;
 
 use crate::apply::Status;
 use crate::config::Config;
@@ -51,160 +55,144 @@ pub enum IpcEvent {
     Reconfigure,
 }
 
+struct IpcState {
+    shared: Arc<Shared>,
+    events: Sender<IpcEvent>,
+}
+
 pub fn write_frame_to(writer: &mut impl Write, msg: &impl serde::Serialize) -> Result<()> {
-    let payload = serde_json::to_vec(msg)?;
-    if payload.len() > MAX_IPC_FRAME_BYTES {
-        return Err(Error::Ipc(format!(
-            "frame length {} exceeds max {MAX_IPC_FRAME_BYTES}",
-            payload.len()
-        )));
-    }
-    let len = u32::try_from(payload.len())
-        .map_err(|_| Error::Ipc("frame too large for u32 length prefix".into()))?
-        .to_le_bytes();
-    writer.write_all(&len)?;
-    writer.write_all(&payload)?;
-    writer.flush()?;
-    Ok(())
+    write_frame_with_limit(writer, msg, MAX_IPC_FRAME_BYTES).map_err(map_frame)
 }
 
 pub fn read_frame_from(reader: &mut impl Read) -> Result<Vec<u8>> {
-    let mut len_buf = [0u8; 4];
-    reader.read_exact(&mut len_buf)?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    if len > MAX_IPC_FRAME_BYTES {
-        return Err(Error::Ipc(format!("frame length {len} too large")));
+    read_frame_bytes(reader, MAX_IPC_FRAME_BYTES).map_err(map_frame)
+}
+
+fn map_frame(e: bigfred_shared_daemon::ipc::FrameError) -> Error {
+    Error::Ipc(e.to_string())
+}
+
+fn map_bind(e: BindError) -> Error {
+    match e {
+        BindError::AlreadyRunning {
+            process_name,
+            location,
+            ..
+        } => Error::Ipc(format!("{process_name} already running at {location}")),
+        BindError::Io { path, source } => Error::io_at(path, source),
     }
-    let mut buf = vec![0u8; len];
-    reader.read_exact(&mut buf)?;
-    Ok(buf)
 }
 
-fn bind_singleton(socket_path: &Path) -> Result<UnixListener> {
-    match UnixStream::connect(socket_path) {
-        Ok(stream) => {
-            let pid = peer_pid(&stream);
-            let where_ = if pid != 0 {
-                format!("{} (pid {pid})", socket_path.display())
-            } else {
-                socket_path.display().to_string()
-            };
-            return Err(Error::Ipc(format!("micronet already running at {where_}")));
-        }
-        Err(e) if is_stale_socket_connect_error(&e) => {}
-        Err(e) => return Err(Error::io_at(socket_path, e)),
+struct StatusCmd;
+struct InfoCmd;
+struct ReconfigureCmd;
+
+impl Command<IpcState> for StatusCmd {
+    fn name(&self) -> &'static str {
+        "status"
     }
-    match std::fs::remove_file(socket_path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(Error::io_at(socket_path, e)),
-    }
-    UnixListener::bind(socket_path).map_err(|e| Error::io_at(socket_path, e))
-}
-
-fn is_stale_socket_connect_error(err: &std::io::Error) -> bool {
-    matches!(
-        err.kind(),
-        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-    )
-}
-
-fn peer_pid(stream: &UnixStream) -> u32 {
-    use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
-    getsockopt(stream, PeerCredentials)
-        .map(|c| c.pid() as u32)
-        .unwrap_or(0)
-}
-
-fn apply_socket_perms(socket_path: &Path) -> Result<()> {
-    let mut perms = std::fs::metadata(socket_path)
-        .map_err(|e| Error::io_at(socket_path, e))?
-        .permissions();
-    perms.set_mode(0o600);
-    std::fs::set_permissions(socket_path, perms).map_err(|e| Error::io_at(socket_path, e))?;
-    Ok(())
-}
-
-/// Bind the control socket and serve requests in a background thread.
-pub fn serve(path: &Path, shared: Arc<Shared>, events: Sender<IpcEvent>) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| Error::io_at(parent, e))?;
-        }
-    }
-    let listener = bind_singleton(path)?;
-    apply_socket_perms(path)?;
-    log::info!("ctl listening on {}", path.display());
-
-    let path = path.to_path_buf();
-    let clients = Arc::new(AtomicUsize::new(0));
-    thread::Builder::new()
-        .name("ctl".into())
-        .spawn(move || {
-            for conn in listener.incoming() {
-                match conn {
-                    Ok(stream) => {
-                        let n = clients.load(Ordering::SeqCst);
-                        if n >= MAX_IPC_CLIENTS {
-                            log::warn!("ipc client limit {MAX_IPC_CLIENTS} reached");
-                            drop(stream);
-                            continue;
-                        }
-                        clients.fetch_add(1, Ordering::SeqCst);
-                        let shared = Arc::clone(&shared);
-                        let events = events.clone();
-                        let clients = Arc::clone(&clients);
-                        thread::spawn(move || {
-                            handle_conn(stream, &shared, &events);
-                            clients.fetch_sub(1, Ordering::SeqCst);
-                        });
-                    }
-                    Err(_) => {
-                        if !path.exists() {
-                            break;
-                        }
-                    }
-                }
-            }
-        })
-        .map_err(|e| Error::Other(e.to_string()))?;
-    Ok(())
-}
-
-fn handle_conn(mut stream: UnixStream, shared: &Shared, events: &Sender<IpcEvent>) {
-    let payload = match read_frame_from(&mut stream) {
-        Ok(p) => p,
-        Err(e) => {
-            log::debug!("ipc read: {e}");
-            return;
-        }
-    };
-    let req: Request = match serde_json::from_slice(&payload) {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = write_frame_to(
-                &mut stream,
-                &Response::Error {
-                    message: e.to_string(),
-                },
-            );
-            return;
-        }
-    };
-    let resp = match req {
-        Request::Status => match (shared.status.read(), shared.health.read()) {
+    fn execute(
+        &self,
+        state: &IpcState,
+        _body: Value,
+        conn: &mut Connection,
+    ) -> std::result::Result<(), IpcError> {
+        let resp = match (state.shared.status.read(), state.shared.health.read()) {
             (Ok(s), Ok(h)) => Response::from_status(&s, &h),
             _ => Response::Error {
                 message: "status lock poisoned".into(),
             },
-        },
-        Request::Info => Response::from_info(&version::info()),
-        Request::Reconfigure => {
-            let _ = events.send(IpcEvent::Reconfigure);
-            Response::Ok
+        };
+        conn.reply(&resp).map_err(IpcError::from)
+    }
+}
+
+impl Command<IpcState> for InfoCmd {
+    fn name(&self) -> &'static str {
+        "info"
+    }
+    fn execute(
+        &self,
+        _state: &IpcState,
+        _body: Value,
+        conn: &mut Connection,
+    ) -> std::result::Result<(), IpcError> {
+        conn.reply(&Response::from_info(&version::info()))
+            .map_err(IpcError::from)
+    }
+}
+
+impl Command<IpcState> for ReconfigureCmd {
+    fn name(&self) -> &'static str {
+        "reconfigure"
+    }
+    fn execute(
+        &self,
+        state: &IpcState,
+        _body: Value,
+        conn: &mut Connection,
+    ) -> std::result::Result<(), IpcError> {
+        let _ = state.events.send(IpcEvent::Reconfigure);
+        conn.reply(&Response::Ok).map_err(IpcError::from)
+    }
+}
+
+struct MicronetHooks;
+
+impl ErrorHandler<IpcState> for MicronetHooks {
+    fn unknown(&self, _state: &IpcState, type_name: &str, _body: &Value, conn: &mut Connection) {
+        let _ = conn.reply(&Response::Error {
+            message: format!(
+                "unknown variant `{type_name}`, expected one of `status`, `info`, `reconfigure`"
+            ),
+        });
+    }
+    fn error(&self, _state: &IpcState, err: &IpcError, conn: &mut Connection) {
+        let _ = conn.reply(&Response::Error {
+            message: err.to_string(),
+        });
+    }
+    fn reject(&self, _state: &IpcState, reason: RejectReason, _conn: &mut Connection) {
+        if reason == RejectReason::Busy {
+            log::warn!("ipc client limit {MAX_IPC_CLIENTS} reached");
         }
-    };
-    let _ = write_frame_to(&mut stream, &resp);
+    }
+}
+
+/// Bind the control socket and serve requests in a background thread.
+pub fn serve(path: &Path, shared: Arc<Shared>, events: Sender<IpcEvent>) -> Result<()> {
+    let mut router = Router::new();
+    router
+        .add(StatusCmd)
+        .map_err(|e| Error::Other(e.to_string()))?;
+    router
+        .add(InfoCmd)
+        .map_err(|e| Error::Other(e.to_string()))?;
+    router
+        .add(ReconfigureCmd)
+        .map_err(|e| Error::Other(e.to_string()))?;
+
+    let state = Arc::new(IpcState { shared, events });
+    bigfred_shared_daemon::ipc::serve_background(
+        BindOptions {
+            path: path.to_path_buf(),
+            mode: 0o600,
+            chown: None,
+            process_name: "micronet",
+        },
+        AcceptPolicy {
+            auth: Auth::None,
+            session: SessionMode::OneShot,
+            max_clients: Some(MAX_IPC_CLIENTS),
+            max_frame: MAX_IPC_FRAME_BYTES,
+        },
+        router,
+        MicronetHooks,
+        state,
+    )
+    .map_err(map_bind)?;
+    log::info!("ctl listening on {}", path.display());
+    Ok(())
 }
 
 /// Client: send one request, read one response.

@@ -1,6 +1,5 @@
 //! `$DATA_DIR/etc/micronet.json` — camelCase, no hardcoded `/data` paths.
 
-use std::fs;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
@@ -382,40 +381,33 @@ pub fn parse_sticky(s: &str) -> Result<u64> {
 
 /// Load JSON; missing file → defaults written as an example (no `socket` field).
 pub fn load_or_create(path: &Path) -> Result<Config> {
-    match fs::read_to_string(path) {
-        Ok(text) => {
-            let cfg: Config = serde_json::from_str(&text)?;
-            cfg.validate()?;
-            Ok(cfg)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let cfg = Config::default();
-            cfg.validate()?;
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).map_err(|err| Error::io_at(parent, err))?;
-            }
-            let body = serde_json::to_string_pretty(&cfg)?;
-            fs::write(path, body + "\n").map_err(|err| Error::io_at(path, err))?;
-            Ok(cfg)
-        }
-        Err(e) => Err(Error::io_at(path, e)),
-    }
+    use bigfred_shared_daemon::config::Load;
+    let cfg = bigfred_shared_daemon::config::JsonFile::<Config>::new(path)
+        .create_default()
+        .load()
+        .map_err(map_config)?;
+    cfg.validate()?;
+    Ok(cfg)
 }
 
 /// Load existing JSON; missing → defaults in memory (do not write).
 pub fn load(path: &Path) -> Result<Config> {
-    match fs::read_to_string(path) {
-        Ok(text) => {
-            let cfg: Config = serde_json::from_str(&text)?;
-            cfg.validate()?;
-            Ok(cfg)
+    use bigfred_shared_daemon::config::Load;
+    let cfg = bigfred_shared_daemon::config::JsonFile::<Config>::new(path)
+        .missing_defaults()
+        .load()
+        .map_err(map_config)?;
+    cfg.validate()?;
+    Ok(cfg)
+}
+
+fn map_config(e: bigfred_shared_daemon::config::ConfigError) -> Error {
+    match e {
+        bigfred_shared_daemon::config::ConfigError::Io { path, source } => {
+            Error::io_at(PathBuf::from(path), source)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let cfg = Config::default();
-            cfg.validate()?;
-            Ok(cfg)
-        }
-        Err(e) => Err(Error::io_at(path, e)),
+        bigfred_shared_daemon::config::ConfigError::Json(j) => Error::Json(j),
+        bigfred_shared_daemon::config::ConfigError::Other(s) => Error::Other(s),
     }
 }
 
@@ -424,6 +416,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]

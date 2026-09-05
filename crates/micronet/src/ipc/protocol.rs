@@ -98,8 +98,20 @@ mod tests {
     fn roundtrip_status() {
         let req = Request::Status;
         let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("status"));
+        assert_eq!(json, r#"{"type":"status"}"#);
         let back: Request = serde_json::from_str(&json).unwrap();
         assert_eq!(back, Request::Status);
+    }
+
+    #[test]
+    fn golden_request_tags() {
+        assert_eq!(
+            serde_json::to_string(&Request::Info).unwrap(),
+            r#"{"type":"info"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::Reconfigure).unwrap(),
+            r#"{"type":"reconfigure"}"#
+        );
     }
 }

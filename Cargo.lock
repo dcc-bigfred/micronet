@@ -79,6 +79,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "bigfred-shared-daemon"
+version = "0.1.0"
+source = "git+https://github.com/dcc-bigfred/rust-commons.git?branch=main#5f5053ef9316139c7cde500e6e9e85a70dbbbd09"
+dependencies = [
+ "log",
+ "nix",
+ "notify",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -259,7 +273,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -632,13 +646,13 @@ dependencies = [
 name = "micronet"
 version = "0.1.0"
 dependencies = [
+ "bigfred-shared-daemon",
  "clap",
  "dhcproto",
  "env_logger",
  "ipnet",
  "log",
  "nix",
- "notify",
  "serde",
  "serde_json",
  "signal-hook",
@@ -849,7 +863,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1012,7 +1026,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1202,7 +1216,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
